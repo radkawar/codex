@@ -11,6 +11,10 @@
 use std::path::PathBuf;
 
 use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::AuthProfileActivateResponse;
+use codex_app_server_protocol::AuthProfileDeleteResponse;
+use codex_app_server_protocol::AuthProfileListResponse;
+use codex_app_server_protocol::AuthProfileSaveResponse;
 use codex_app_server_protocol::McpServerStatus;
 use codex_app_server_protocol::PluginInstallResponse;
 use codex_app_server_protocol::PluginListResponse;
@@ -175,6 +179,45 @@ pub(crate) enum AppEvent {
     /// Refresh account rate limits in the background.
     RefreshRateLimits {
         origin: RateLimitRefreshOrigin,
+    },
+
+    /// List named auth profiles stored under the current Codex home.
+    ListAuthProfiles,
+
+    /// Save the current stored auth as a named profile.
+    SaveAuthProfile {
+        name: String,
+        overwrite: bool,
+    },
+
+    /// Activate a named auth profile and reload auth state.
+    ActivateAuthProfile {
+        name: String,
+    },
+
+    /// Delete a named auth profile.
+    DeleteAuthProfile {
+        name: String,
+    },
+
+    /// Result of listing auth profiles.
+    AuthProfilesLoaded {
+        result: Result<AuthProfileListResponse, String>,
+    },
+
+    /// Result of saving an auth profile.
+    AuthProfileSaved {
+        result: Result<AuthProfileSaveResponse, String>,
+    },
+
+    /// Result of activating an auth profile.
+    AuthProfileActivated {
+        result: Result<AuthProfileActivateResponse, String>,
+    },
+
+    /// Result of deleting an auth profile.
+    AuthProfileDeleted {
+        result: Result<AuthProfileDeleteResponse, String>,
     },
 
     /// Result of refreshing rate limits.

@@ -355,6 +355,7 @@ use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
+mod auth_profiles;
 mod interrupts;
 use self::interrupts::InterruptManager;
 mod session_header;
@@ -885,6 +886,8 @@ pub(crate) struct ChatWidget {
     suppress_initial_user_message_submit: bool,
     // User messages queued while a turn is in progress
     queued_user_messages: VecDeque<UserMessage>,
+    // Optional follow-up that is submitted only after a successful turn completes.
+    stop_loop: Option<StopLoopConfig>,
     // User messages that tried to steer a non-regular turn and must be retried first.
     rejected_steers_queue: VecDeque<UserMessage>,
     // Steers already submitted to core but not yet committed into history.
@@ -1070,10 +1073,23 @@ pub(crate) struct ThreadInputState {
     pending_steers: VecDeque<UserMessage>,
     rejected_steers_queue: VecDeque<UserMessage>,
     queued_user_messages: VecDeque<UserMessage>,
+    stop_loop: Option<StopLoopConfig>,
     current_collaboration_mode: CollaborationMode,
     active_collaboration_mask: Option<CollaborationModeMask>,
     task_running: bool,
     agent_turn_running: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct StopLoopConfig {
+    prompt: String,
+    mode: StopLoopMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StopLoopMode {
+    Once,
+    Always,
 }
 
 impl From<String> for UserMessage {
@@ -2443,6 +2459,7 @@ impl ChatWidget {
         }
         // If there is a queued user message, send exactly one now to begin the next turn.
         self.maybe_send_next_queued_input();
+        self.maybe_run_stop_loop();
         // Emit a notification when the turn completes (suppressed if focused).
         self.notify(Notification::AgentTurnComplete {
             response: notification_response,
@@ -2817,6 +2834,7 @@ impl ChatWidget {
 
     fn on_server_overloaded_error(&mut self, message: String) {
         self.submit_pending_steers_after_interrupt = false;
+        self.disable_stop_loop_due_to_limit();
         self.finalize_turn();
 
         let message = if message.trim().is_empty() {
@@ -2856,6 +2874,7 @@ impl ChatWidget {
             match info {
                 RateLimitErrorKind::ServerOverloaded => self.on_server_overloaded_error(message),
                 RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
+                    self.disable_stop_loop_due_to_limit();
                     self.on_error(message)
                 }
             }
@@ -3227,6 +3246,7 @@ impl ChatWidget {
                 .collect(),
             rejected_steers_queue: self.rejected_steers_queue.clone(),
             queued_user_messages: self.queued_user_messages.clone(),
+            stop_loop: self.stop_loop.clone(),
             current_collaboration_mode: self.current_collaboration_mode.clone(),
             active_collaboration_mask: self.active_collaboration_mask.clone(),
             task_running: self.bottom_pane.is_task_running(),
@@ -3281,6 +3301,7 @@ impl ChatWidget {
                 .collect();
             self.rejected_steers_queue = input_state.rejected_steers_queue;
             self.queued_user_messages = input_state.queued_user_messages;
+            self.stop_loop = input_state.stop_loop;
         } else {
             self.agent_turn_running = false;
             self.pending_steers.clear();
@@ -3294,6 +3315,7 @@ impl ChatWidget {
             );
             self.bottom_pane.set_composer_pending_pastes(Vec::new());
             self.queued_user_messages.clear();
+            self.stop_loop = None;
         }
         self.turn_sleep_inhibitor
             .set_turn_running(self.agent_turn_running);
@@ -4897,6 +4919,7 @@ impl ChatWidget {
             thread_name: None,
             forked_from: None,
             queued_user_messages: VecDeque::new(),
+            stop_loop: None,
             rejected_steers_queue: VecDeque::new(),
             pending_steers: VecDeque::new(),
             submit_pending_steers_after_interrupt: false,
@@ -6713,6 +6736,7 @@ impl ChatWidget {
                             self.on_server_overloaded_error(message)
                         }
                         RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
+                            self.disable_stop_loop_due_to_limit();
                             self.on_error(message)
                         }
                     }
@@ -7106,6 +7130,61 @@ impl ChatWidget {
         );
     }
 
+    fn set_stop_loop(&mut self, mode: StopLoopMode, prompt: String) {
+        let trimmed = prompt.trim().to_string();
+        if trimmed.is_empty() {
+            self.add_error_message("Loop prompt cannot be empty.".to_string());
+            return;
+        }
+        self.stop_loop = Some(StopLoopConfig {
+            prompt: trimmed.clone(),
+            mode,
+        });
+        let scope = match mode {
+            StopLoopMode::Once => "next successful turn",
+            StopLoopMode::Always => "every successful turn",
+        };
+        self.add_info_message(
+            format!("Loop armed for {scope}: {trimmed}"),
+            /*hint*/ None,
+        );
+    }
+
+    fn show_stop_loop_status(&mut self) {
+        let message = match &self.stop_loop {
+            Some(config) => match config.mode {
+                StopLoopMode::Once => format!("Loop is armed once: {}", config.prompt),
+                StopLoopMode::Always => format!("Loop is armed persistently: {}", config.prompt),
+            },
+            None => "Loop is off.".to_string(),
+        };
+        self.add_info_message(message, /*hint*/ None);
+    }
+
+    fn maybe_run_stop_loop(&mut self) {
+        if self.bottom_pane.is_task_running() || self.has_queued_follow_up_messages() {
+            return;
+        }
+
+        let Some(config) = self.stop_loop.clone() else {
+            return;
+        };
+
+        if matches!(config.mode, StopLoopMode::Once) {
+            self.stop_loop = None;
+        }
+        self.submit_user_message(config.prompt.into());
+    }
+
+    fn disable_stop_loop_due_to_limit(&mut self) {
+        if self.stop_loop.take().is_some() {
+            self.add_to_history(history_cell::new_warning_event(
+                "Loop disabled after a rate limit or quota error.".to_string(),
+            ));
+            self.request_redraw();
+        }
+    }
+
     pub(crate) fn set_pending_thread_approvals(&mut self, threads: Vec<String>) {
         self.bottom_pane.set_pending_thread_approvals(threads);
     }
@@ -7116,6 +7195,75 @@ impl ChatWidget {
 
     pub(crate) fn on_diff_complete(&mut self) {
         self.request_redraw();
+    }
+
+    pub(crate) fn add_auth_profiles_output(
+        &mut self,
+        result: Result<codex_app_server_protocol::AuthProfileListResponse, String>,
+    ) {
+        match result {
+            Ok(response) => {
+                if response.profiles.is_empty() {
+                    self.add_info_message(
+                        "No saved auth profiles.".to_string(),
+                        /*hint*/ None,
+                    );
+                    return;
+                }
+                self.add_info_message(
+                    auth_profiles::format_auth_profiles_output(&response),
+                    /*hint*/ None,
+                );
+            }
+            Err(err) => self.add_error_message(format!("Failed to list auth profiles: {err}")),
+        }
+    }
+
+    pub(crate) fn on_auth_profile_saved(
+        &mut self,
+        result: Result<codex_app_server_protocol::AuthProfileSaveResponse, String>,
+    ) {
+        match result {
+            Ok(response) => self.add_info_message(
+                format!("Saved auth profile {}", response.profile.name),
+                /*hint*/ None,
+            ),
+            Err(err) => self.add_error_message(format!("Failed to save auth profile: {err}")),
+        }
+    }
+
+    pub(crate) fn on_auth_profile_activated(
+        &mut self,
+        result: Result<codex_app_server_protocol::AuthProfileActivateResponse, String>,
+    ) {
+        match result {
+            Ok(response) => {
+                self.clear_token_usage();
+                self.rate_limit_snapshots_by_limit_id.clear();
+                self.add_info_message(
+                    format!("Activated auth profile {}", response.profile.name),
+                    /*hint*/ None,
+                );
+            }
+            Err(err) => self.add_error_message(format!("Failed to activate auth profile: {err}")),
+        }
+    }
+
+    pub(crate) fn on_auth_profile_deleted(
+        &mut self,
+        result: Result<codex_app_server_protocol::AuthProfileDeleteResponse, String>,
+    ) {
+        match result {
+            Ok(response) => self.add_info_message(
+                if response.deleted {
+                    "Deleted auth profile.".to_string()
+                } else {
+                    "Auth profile did not exist.".to_string()
+                },
+                /*hint*/ None,
+            ),
+            Err(err) => self.add_error_message(format!("Failed to delete auth profile: {err}")),
+        }
     }
 
     pub(crate) fn add_status_output(

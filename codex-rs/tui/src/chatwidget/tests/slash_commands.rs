@@ -180,6 +180,183 @@ async fn usage_error_slash_command_is_available_from_local_recall() {
 }
 
 #[tokio::test]
+async fn slash_account_save_emits_app_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/account save work");
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::SaveAuthProfile { name, overwrite })
+            if name == "work" && !overwrite
+    );
+}
+
+#[tokio::test]
+async fn slash_account_use_emits_app_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/account use work");
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::ActivateAuthProfile { name }) if name == "work"
+    );
+}
+
+#[tokio::test]
+async fn slash_account_delete_emits_app_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/account delete work");
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::DeleteAuthProfile { name }) if name == "work"
+    );
+}
+
+#[tokio::test]
+async fn auth_profiles_output_renders_table_with_reset_columns() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let captured_at = chrono::Local::now();
+    let five_hour_reset = captured_at + chrono::Duration::minutes(10);
+    let weekly_reset = captured_at + chrono::Duration::days(7);
+
+    chat.add_auth_profiles_output(Ok(codex_app_server_protocol::AuthProfileListResponse {
+        profiles: vec![codex_app_server_protocol::AuthProfileSummary {
+            name: "example-profile".to_string(),
+            account: Some(codex_app_server_protocol::Account::Chatgpt {
+                email: "example@example.com".to_string(),
+                plan_type: codex_protocol::account::PlanType::Pro,
+            }),
+            rate_limits: Some(codex_app_server_protocol::RateLimitSnapshot {
+                limit_id: Some("codex".to_string()),
+                limit_name: None,
+                primary: Some(codex_app_server_protocol::RateLimitWindow {
+                    used_percent: 12,
+                    window_duration_mins: Some(300),
+                    resets_at: Some(five_hour_reset.timestamp()),
+                }),
+                secondary: Some(codex_app_server_protocol::RateLimitWindow {
+                    used_percent: 95,
+                    window_duration_mins: Some(7 * 24 * 60),
+                    resets_at: Some(weekly_reset.timestamp()),
+                }),
+                credits: None,
+                plan_type: None,
+            }),
+            active: true,
+        }],
+    }));
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(cells.last().expect("auth profiles output"));
+    let lines = rendered.lines().collect::<Vec<_>>();
+    let expected_five_hour_reset =
+        crate::status::format_reset_timestamp(five_hour_reset, captured_at);
+    let expected_weekly_reset = crate::status::format_reset_timestamp(weekly_reset, captured_at);
+
+    assert!(
+        lines[1].contains("CUR")
+            && lines[1].contains("5H RESET")
+            && lines[1].contains("WEEKLY RESET"),
+        "expected table headers, got: {rendered:?}"
+    );
+    assert!(
+        lines[3].contains("yes")
+            && lines[3].contains("example-profile")
+            && lines[3].contains("example@example.com")
+            && lines[3].contains("Pro")
+            && lines[3].contains("88%")
+            && lines[3].contains("5%")
+            && lines[3].contains(expected_five_hour_reset.as_str())
+            && lines[3].contains(expected_weekly_reset.as_str()),
+        "expected formatted table row, got: {rendered:?}"
+    );
+}
+
+#[tokio::test]
+async fn loop_once_runs_after_successful_turn_completion() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+
+    chat.handle_codex_event(Event {
+        id: "turn-start".into(),
+        msg: EventMsg::TurnStarted(TurnStartedEvent {
+            turn_id: "turn-1".to_string(),
+            started_at: None,
+            model_context_window: None,
+            collaboration_mode_kind: ModeKind::Default,
+        }),
+    });
+
+    submit_composer_text(&mut chat, "/loop once keep going");
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(&cells[0]);
+    assert!(
+        rendered.contains("Loop armed for next successful turn: keep going"),
+        "expected loop arm message, got: {rendered:?}"
+    );
+
+    chat.handle_codex_event(Event {
+        id: "turn-complete".into(),
+        msg: EventMsg::TurnComplete(turn_complete_event("turn-1", Some("done"))),
+    });
+
+    match next_submit_op(&mut op_rx) {
+        Op::UserTurn { items, .. } => assert_eq!(
+            items,
+            vec![UserInput::Text {
+                text: "keep going".to_string(),
+                text_elements: Vec::new(),
+            }]
+        ),
+        other => panic!("expected loop follow-up user turn, got {other:?}"),
+    }
+
+    chat.dispatch_command(SlashCommand::Loop);
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(cells.last().expect("loop status cell"));
+    assert!(
+        rendered.contains("Loop is off."),
+        "expected loop to clear once"
+    );
+}
+
+#[tokio::test]
+async fn usage_limit_error_disables_loop() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/loop always keep going");
+    let _ = drain_insert_history(&mut rx);
+
+    chat.handle_codex_event(Event {
+        id: "limit-error".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "limit hit".to_string(),
+            codex_error_info: Some(CodexErrorInfo::UsageLimitExceeded),
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        rendered.contains("Loop disabled after a rate limit or quota error."),
+        "expected loop disable warning, got: {rendered:?}"
+    );
+
+    chat.dispatch_command(SlashCommand::Loop);
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(cells.last().expect("loop status cell"));
+    assert!(rendered.contains("Loop is off."), "expected loop to be off");
+}
+
+#[tokio::test]
 async fn unrecognized_slash_command_is_not_added_to_local_recall() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

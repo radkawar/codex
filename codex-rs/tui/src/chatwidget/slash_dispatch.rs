@@ -281,6 +281,18 @@ impl ChatWidget {
                     );
                 }
             }
+            SlashCommand::Accounts => {
+                self.app_event_tx.send(AppEvent::ListAuthProfiles);
+            }
+            SlashCommand::Account => {
+                self.add_error_message(
+                    "Usage: /account [save <name> [--overwrite] | use <name> | delete <name>]"
+                        .to_string(),
+                );
+            }
+            SlashCommand::Loop => {
+                self.show_stop_loop_status();
+            }
             SlashCommand::DebugConfig => {
                 self.add_debug_config_output();
             }
@@ -423,6 +435,120 @@ impl ChatWidget {
                         self.add_error_message("Usage: /fast [on|off|status]".to_string());
                     }
                 }
+            }
+            SlashCommand::Account if !trimmed.is_empty() => {
+                let prepared_args = if self.bottom_pane.composer_text().is_empty() {
+                    args
+                } else {
+                    let Some((prepared_args, _prepared_elements)) = self
+                        .bottom_pane
+                        .prepare_inline_args_submission(/*record_history*/ false)
+                    else {
+                        return;
+                    };
+                    prepared_args
+                };
+                let mut words = prepared_args.split_whitespace();
+                let Some(action) = words.next() else {
+                    self.dispatch_command(cmd);
+                    return;
+                };
+                match action {
+                    "save" => {
+                        let Some(name) = words.next() else {
+                            self.add_error_message(
+                                "Usage: /account save <name> [--overwrite]".to_string(),
+                            );
+                            return;
+                        };
+                        let overwrite = matches!(words.next(), Some("--overwrite"));
+                        if words.next().is_some() {
+                            self.add_error_message(
+                                "Usage: /account save <name> [--overwrite]".to_string(),
+                            );
+                            return;
+                        }
+                        self.app_event_tx.send(AppEvent::SaveAuthProfile {
+                            name: name.to_string(),
+                            overwrite,
+                        });
+                        self.bottom_pane.drain_pending_submission_state();
+                    }
+                    "use" | "switch" => {
+                        let Some(name) = words.next() else {
+                            self.add_error_message("Usage: /account use <name>".to_string());
+                            return;
+                        };
+                        if words.next().is_some() {
+                            self.add_error_message("Usage: /account use <name>".to_string());
+                            return;
+                        }
+                        self.app_event_tx.send(AppEvent::ActivateAuthProfile {
+                            name: name.to_string(),
+                        });
+                        self.bottom_pane.drain_pending_submission_state();
+                    }
+                    "delete" | "remove" | "rm" => {
+                        let Some(name) = words.next() else {
+                            self.add_error_message("Usage: /account delete <name>".to_string());
+                            return;
+                        };
+                        if words.next().is_some() {
+                            self.add_error_message("Usage: /account delete <name>".to_string());
+                            return;
+                        }
+                        self.app_event_tx.send(AppEvent::DeleteAuthProfile {
+                            name: name.to_string(),
+                        });
+                        self.bottom_pane.drain_pending_submission_state();
+                    }
+                    _ => {
+                        self.add_error_message(
+                            "Usage: /account [save <name> [--overwrite] | use <name> | delete <name>]"
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+            SlashCommand::Loop => {
+                let prepared_args = if self.bottom_pane.composer_text().is_empty() {
+                    args
+                } else {
+                    let Some((prepared_args, _prepared_elements)) = self
+                        .bottom_pane
+                        .prepare_inline_args_submission(/*record_history*/ false)
+                    else {
+                        return;
+                    };
+                    prepared_args
+                };
+                let trimmed = prepared_args.trim();
+                if trimmed.is_empty() {
+                    self.show_stop_loop_status();
+                    return;
+                }
+                if matches!(trimmed, "off" | "clear") {
+                    self.stop_loop = None;
+                    self.add_info_message("Loop disabled.".to_string(), /*hint*/ None);
+                    return;
+                }
+                if trimmed == "status" {
+                    self.show_stop_loop_status();
+                    return;
+                }
+                if let Some(prompt) = trimmed.strip_prefix("once ") {
+                    self.set_stop_loop(StopLoopMode::Once, prompt.to_string());
+                    return;
+                }
+                if let Some(prompt) = trimmed.strip_prefix("on ") {
+                    self.set_stop_loop(StopLoopMode::Always, prompt.to_string());
+                    return;
+                }
+                if let Some(prompt) = trimmed.strip_prefix("always ") {
+                    self.set_stop_loop(StopLoopMode::Always, prompt.to_string());
+                    return;
+                }
+                self.set_stop_loop(StopLoopMode::Always, trimmed.to_string());
             }
             SlashCommand::Rename if !trimmed.is_empty() => {
                 self.session_telemetry

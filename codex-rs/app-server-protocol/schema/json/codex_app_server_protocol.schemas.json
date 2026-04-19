@@ -1762,6 +1762,101 @@
             },
             "method": {
               "enum": [
+                "account/authProfile/list"
+              ],
+              "title": "Account/authProfile/listRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "Account/authProfile/listRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "account/authProfile/save"
+              ],
+              "title": "Account/authProfile/saveRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/AuthProfileSaveParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Account/authProfile/saveRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "account/authProfile/activate"
+              ],
+              "title": "Account/authProfile/activateRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/AuthProfileActivateParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Account/authProfile/activateRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "account/authProfile/delete"
+              ],
+              "title": "Account/authProfile/deleteRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/AuthProfileDeleteParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "Account/authProfile/deleteRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "fuzzyFileSearch"
               ],
               "title": "FuzzyFileSearchRequestMethod",
@@ -5741,6 +5836,149 @@
             "type": "string"
           }
         ]
+      },
+      "AuthProfileActivateParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "AuthProfileActivateParams",
+        "type": "object"
+      },
+      "AuthProfileActivateResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "currentAccount": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/Account"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "profile": {
+            "$ref": "#/definitions/v2/AuthProfileSummary"
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "title": "AuthProfileActivateResponse",
+        "type": "object"
+      },
+      "AuthProfileDeleteParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "AuthProfileDeleteParams",
+        "type": "object"
+      },
+      "AuthProfileDeleteResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "deleted"
+        ],
+        "title": "AuthProfileDeleteResponse",
+        "type": "object"
+      },
+      "AuthProfileListResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "profiles": {
+            "items": {
+              "$ref": "#/definitions/v2/AuthProfileSummary"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "profiles"
+        ],
+        "title": "AuthProfileListResponse",
+        "type": "object"
+      },
+      "AuthProfileSaveParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "overwrite": {
+            "default": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "AuthProfileSaveParams",
+        "type": "object"
+      },
+      "AuthProfileSaveResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "profile": {
+            "$ref": "#/definitions/v2/AuthProfileSummary"
+          }
+        },
+        "required": [
+          "profile"
+        ],
+        "title": "AuthProfileSaveResponse",
+        "type": "object"
+      },
+      "AuthProfileSummary": {
+        "properties": {
+          "account": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/Account"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "rateLimits": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/RateLimitSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "active",
+          "name"
+        ],
+        "type": "object"
       },
       "AutoReviewDecisionSource": {
         "description": "[UNSTABLE] Source that produced a terminal approval auto-review decision.",

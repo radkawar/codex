@@ -1,3 +1,7 @@
+use crate::auth_profiles::delete_auth_profile;
+use crate::auth_profiles::list_auth_profiles;
+use crate::auth_profiles::load_auth_profile;
+use crate::auth_profiles::save_auth_profile;
 use crate::bespoke_event_handling::apply_bespoke_event_handling;
 use crate::bespoke_event_handling::maybe_emit_hook_prompt_item_completed;
 use crate::command_exec::CommandExecManager;
@@ -37,6 +41,13 @@ use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::AuthMode as CoreAuthMode;
+use codex_app_server_protocol::AuthProfileActivateParams;
+use codex_app_server_protocol::AuthProfileActivateResponse;
+use codex_app_server_protocol::AuthProfileDeleteParams;
+use codex_app_server_protocol::AuthProfileDeleteResponse;
+use codex_app_server_protocol::AuthProfileListResponse;
+use codex_app_server_protocol::AuthProfileSaveParams;
+use codex_app_server_protocol::AuthProfileSaveResponse;
 use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginAccountStatus;
@@ -268,6 +279,7 @@ use codex_feedback::CodexFeedback;
 use codex_feedback::FeedbackUploadOptions;
 use codex_git_utils::git_diff_to_remote;
 use codex_git_utils::resolve_root_git_project_for_trust;
+use codex_login::AuthDotJson;
 use codex_login::AuthManager;
 use codex_login::CLIENT_ID;
 use codex_login::CodexAuth;
@@ -275,8 +287,11 @@ use codex_login::ServerOptions as LoginServerOptions;
 use codex_login::ShutdownHandle;
 use codex_login::auth::login_with_chatgpt_auth_tokens;
 use codex_login::complete_device_code_login;
+use codex_login::default_client::get_codex_user_agent;
 use codex_login::default_client::set_default_client_residency_requirement;
+use codex_login::load_auth_dot_json;
 use codex_login::login_with_api_key;
+use codex_login::logout;
 use codex_login::request_device_code;
 use codex_login::run_login_server;
 use codex_mcp::McpServerStatusSnapshot;
@@ -480,6 +495,7 @@ pub(crate) struct CodexMessageProcessor {
     command_exec_manager: CommandExecManager,
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     fuzzy_search_sessions: Arc<Mutex<HashMap<String, FuzzyFileSearchSession>>>,
+    auth_profile_rate_limit_cache: Arc<Mutex<HashMap<String, CachedAuthProfileRateLimits>>>,
     background_tasks: TaskTracker,
     feedback: CodexFeedback,
     log_db: Option<LogDbLayer>,
@@ -518,6 +534,14 @@ enum RefreshTokenRequestOutcome {
     FailedTransiently,
     FailedPermanently,
 }
+
+#[derive(Clone)]
+struct CachedAuthProfileRateLimits {
+    fetched_at: Instant,
+    snapshot: CoreRateLimitSnapshot,
+}
+
+const AUTH_PROFILE_RATE_LIMIT_CACHE_TTL: Duration = Duration::from_secs(60);
 
 struct UnloadingState {
     delay: Duration,
@@ -732,6 +756,7 @@ impl CodexMessageProcessor {
             command_exec_manager: CommandExecManager::default(),
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             fuzzy_search_sessions: Arc::new(Mutex::new(HashMap::new())),
+            auth_profile_rate_limit_cache: Arc::new(Mutex::new(HashMap::new())),
             background_tasks: TaskTracker::new(),
             feedback,
             log_db,
@@ -1119,6 +1144,25 @@ impl CodexMessageProcessor {
             }
             ClientRequest::GetAccount { request_id, params } => {
                 self.get_account(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::AuthProfileList {
+                request_id,
+                params: _,
+            } => {
+                self.list_auth_profiles_v2(to_connection_request_id(request_id))
+                    .await;
+            }
+            ClientRequest::AuthProfileSave { request_id, params } => {
+                self.save_auth_profile_v2(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::AuthProfileActivate { request_id, params } => {
+                self.activate_auth_profile_v2(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::AuthProfileDelete { request_id, params } => {
+                self.delete_auth_profile_v2(to_connection_request_id(request_id), params)
                     .await;
             }
             ClientRequest::GitDiffToRemote { request_id, params } => {
@@ -1890,6 +1934,344 @@ impl CodexMessageProcessor {
         self.outgoing.send_response(request_id, response).await;
     }
 
+    fn current_auth_dot_json(&self) -> std::result::Result<Option<AuthDotJson>, JSONRPCErrorError> {
+        // Profile save/switch needs the exact persisted auth payload shape, not a lossy projection
+        // from AuthManager. Follow the same precedence order as login::load_auth so the selected
+        // profile matches the auth that would actually be used.
+        load_auth_dot_json(
+            &self.config.codex_home,
+            codex_login::AuthCredentialsStoreMode::Ephemeral,
+        )
+        .and_then(|auth| {
+            if auth.is_some() {
+                Ok(auth)
+            } else {
+                load_auth_dot_json(
+                    &self.config.codex_home,
+                    self.config.cli_auth_credentials_store_mode,
+                )
+            }
+        })
+        .map_err(|err| JSONRPCErrorError {
+            code: INTERNAL_ERROR_CODE,
+            message: format!("failed to load current auth state: {err}"),
+            data: None,
+        })
+    }
+
+    fn clear_all_auth_storage(&self) -> std::result::Result<(), JSONRPCErrorError> {
+        logout(
+            &self.config.codex_home,
+            codex_login::AuthCredentialsStoreMode::Ephemeral,
+        )
+        .map_err(|err| JSONRPCErrorError {
+            code: INTERNAL_ERROR_CODE,
+            message: format!("failed to clear external auth before switch: {err}"),
+            data: None,
+        })?;
+
+        if self.config.cli_auth_credentials_store_mode
+            != codex_login::AuthCredentialsStoreMode::Ephemeral
+        {
+            logout(
+                &self.config.codex_home,
+                self.config.cli_auth_credentials_store_mode,
+            )
+            .map_err(|err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to clear stored auth before switch: {err}"),
+                data: None,
+            })?;
+        }
+
+        Ok(())
+    }
+
+    async fn list_auth_profiles_v2(&self, request_id: ConnectionRequestId) {
+        let current_auth = match self.current_auth_dot_json() {
+            Ok(auth) => auth,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match list_auth_profiles(&self.config.codex_home, current_auth.as_ref()) {
+            Ok(mut profiles) => {
+                for profile in &mut profiles {
+                    let Ok(auth) = load_auth_profile(&self.config.codex_home, &profile.name) else {
+                        continue;
+                    };
+                    profile.rate_limits = self
+                        .cached_rate_limits_for_profile(&profile.name, &auth)
+                        .await
+                        .map(Into::into);
+                }
+                self.outgoing
+                    .send_response(request_id, AuthProfileListResponse { profiles })
+                    .await;
+            }
+            Err(err) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: format!("failed to list auth profiles: {err}"),
+                            data: None,
+                        },
+                    )
+                    .await;
+            }
+        }
+    }
+
+    async fn save_auth_profile_v2(
+        &self,
+        request_id: ConnectionRequestId,
+        params: AuthProfileSaveParams,
+    ) {
+        let current_auth = match self.current_auth_dot_json() {
+            Ok(Some(auth)) => auth,
+            Ok(None) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message:
+                                "no stored auth is available to save as a profile; env-only API keys cannot be exported"
+                                    .to_string(),
+                            data: None,
+                        },
+                    )
+                    .await;
+                return;
+            }
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+
+        match save_auth_profile(
+            &self.config.codex_home,
+            &params.name,
+            &current_auth,
+            params.overwrite,
+            Some(&current_auth),
+        ) {
+            Ok(profile) => {
+                self.auth_profile_rate_limit_cache
+                    .lock()
+                    .await
+                    .remove(&params.name);
+                self.outgoing
+                    .send_response(request_id, AuthProfileSaveResponse { profile })
+                    .await;
+            }
+            Err(err) => {
+                let code = if err.kind() == std::io::ErrorKind::AlreadyExists {
+                    INVALID_REQUEST_ERROR_CODE
+                } else if err.kind() == std::io::ErrorKind::InvalidInput {
+                    INVALID_PARAMS_ERROR_CODE
+                } else {
+                    INTERNAL_ERROR_CODE
+                };
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code,
+                            message: format!("failed to save auth profile: {err}"),
+                            data: None,
+                        },
+                    )
+                    .await;
+            }
+        }
+    }
+
+    async fn activate_auth_profile_v2(
+        &self,
+        request_id: ConnectionRequestId,
+        params: AuthProfileActivateParams,
+    ) {
+        let profile_auth = match load_auth_profile(&self.config.codex_home, &params.name) {
+            Ok(auth) => auth,
+            Err(err) => {
+                let code = if err.kind() == std::io::ErrorKind::NotFound {
+                    INVALID_REQUEST_ERROR_CODE
+                } else if err.kind() == std::io::ErrorKind::InvalidInput {
+                    INVALID_PARAMS_ERROR_CODE
+                } else {
+                    INTERNAL_ERROR_CODE
+                };
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code,
+                            message: format!("failed to load auth profile: {err}"),
+                            data: None,
+                        },
+                    )
+                    .await;
+                return;
+            }
+        };
+
+        // Switching profiles should replace the active auth, not leave a lower-precedence fallback
+        // behind in another store.
+        if let Err(error) = self.clear_all_auth_storage() {
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
+
+        let target_store_mode = if matches!(
+            profile_auth.auth_mode,
+            Some(CoreAuthMode::ChatgptAuthTokens)
+        ) {
+            codex_login::AuthCredentialsStoreMode::Ephemeral
+        } else {
+            self.config.cli_auth_credentials_store_mode
+        };
+
+        if let Err(err) =
+            codex_login::save_auth(&self.config.codex_home, &profile_auth, target_store_mode)
+        {
+            self.outgoing
+                .send_error(
+                    request_id,
+                    JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: format!("failed to activate auth profile: {err}"),
+                        data: None,
+                    },
+                )
+                .await;
+            return;
+        }
+
+        self.auth_manager.reload();
+        replace_cloud_requirements_loader(
+            self.cloud_requirements.as_ref(),
+            self.auth_manager.clone(),
+            self.config.chatgpt_base_url.clone(),
+            self.config.codex_home.to_path_buf(),
+        );
+        let cli_overrides = self.current_cli_overrides();
+        sync_default_client_residency_requirement(&cli_overrides, self.cloud_requirements.as_ref())
+            .await;
+
+        let current_auth = match self.current_auth_dot_json() {
+            Ok(auth) => auth,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+        let profiles = match list_auth_profiles(&self.config.codex_home, current_auth.as_ref()) {
+            Ok(profiles) => profiles,
+            Err(err) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INTERNAL_ERROR_CODE,
+                            message: format!("failed to refresh auth profile state: {err}"),
+                            data: None,
+                        },
+                    )
+                    .await;
+                return;
+            }
+        };
+        let Some(profile) = profiles
+            .into_iter()
+            .find(|profile| profile.name == params.name)
+        else {
+            self.outgoing
+                .send_error(
+                    request_id,
+                    JSONRPCErrorError {
+                        code: INTERNAL_ERROR_CODE,
+                        message: "activated auth profile disappeared unexpectedly".to_string(),
+                        data: None,
+                    },
+                )
+                .await;
+            return;
+        };
+
+        let current_account = match self.auth_manager.auth_cached() {
+            Some(auth) => match auth.auth_mode() {
+                CoreAuthMode::ApiKey => Some(Account::ApiKey {}),
+                CoreAuthMode::Chatgpt | CoreAuthMode::ChatgptAuthTokens => {
+                    match (auth.get_account_email(), auth.account_plan_type()) {
+                        (Some(email), Some(plan_type)) => {
+                            Some(Account::Chatgpt { email, plan_type })
+                        }
+                        _ => None,
+                    }
+                }
+            },
+            None => None,
+        };
+
+        self.outgoing
+            .send_response(
+                request_id,
+                AuthProfileActivateResponse {
+                    profile,
+                    current_account,
+                },
+            )
+            .await;
+        self.outgoing
+            .send_server_notification(ServerNotification::AccountUpdated(
+                self.current_account_updated_notification(),
+            ))
+            .await;
+    }
+
+    async fn delete_auth_profile_v2(
+        &self,
+        request_id: ConnectionRequestId,
+        params: AuthProfileDeleteParams,
+    ) {
+        match delete_auth_profile(&self.config.codex_home, &params.name) {
+            Ok(deleted) => {
+                if deleted {
+                    self.auth_profile_rate_limit_cache
+                        .lock()
+                        .await
+                        .remove(&params.name);
+                }
+                self.outgoing
+                    .send_response(request_id, AuthProfileDeleteResponse { deleted })
+                    .await;
+            }
+            Err(err) => {
+                let code = if err.kind() == std::io::ErrorKind::InvalidInput {
+                    INVALID_PARAMS_ERROR_CODE
+                } else {
+                    INTERNAL_ERROR_CODE
+                };
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code,
+                            message: format!("failed to delete auth profile: {err}"),
+                            data: None,
+                        },
+                    )
+                    .await;
+            }
+        }
+    }
+
     async fn get_account_rate_limits(&self, request_id: ConnectionRequestId) {
         match self.fetch_account_rate_limits().await {
             Ok((rate_limits, rate_limits_by_limit_id)) => {
@@ -2010,6 +2392,100 @@ impl CodexMessageProcessor {
                 data: None,
             })?;
 
+        self.fetch_rate_limits_with_client(&client).await
+    }
+
+    async fn cached_rate_limits_for_profile(
+        &self,
+        profile_name: &str,
+        auth: &AuthDotJson,
+    ) -> Option<CoreRateLimitSnapshot> {
+        if let Some(cached) = self.cached_profile_rate_limits(profile_name).await {
+            return Some(cached);
+        }
+
+        let snapshot = self.try_fetch_rate_limits_for_profile_auth(auth).await?;
+        self.auth_profile_rate_limit_cache.lock().await.insert(
+            profile_name.to_string(),
+            CachedAuthProfileRateLimits {
+                fetched_at: Instant::now(),
+                snapshot: snapshot.clone(),
+            },
+        );
+        Some(snapshot)
+    }
+
+    async fn cached_profile_rate_limits(
+        &self,
+        profile_name: &str,
+    ) -> Option<CoreRateLimitSnapshot> {
+        let cache = self.auth_profile_rate_limit_cache.lock().await;
+        let cached = cache.get(profile_name)?;
+        if cached.fetched_at.elapsed() > AUTH_PROFILE_RATE_LIMIT_CACHE_TTL {
+            return None;
+        }
+        Some(cached.snapshot.clone())
+    }
+
+    async fn try_fetch_rate_limits_for_profile_auth(
+        &self,
+        auth: &AuthDotJson,
+    ) -> Option<CoreRateLimitSnapshot> {
+        let client = self.backend_client_for_profile_auth(auth).ok()??;
+        self.fetch_rate_limits_with_client(&client)
+            .await
+            .ok()
+            .map(|(primary, _)| primary)
+    }
+
+    fn backend_client_for_profile_auth(
+        &self,
+        auth: &AuthDotJson,
+    ) -> Result<Option<BackendClient>, IoError> {
+        if auth.openai_api_key.is_some() || matches!(auth.auth_mode, Some(AuthMode::ApiKey)) {
+            return Ok(None);
+        }
+
+        let Some(tokens) = auth.tokens.as_ref() else {
+            return Err(IoError::other("chatgpt auth profile is missing tokens"));
+        };
+
+        if tokens.access_token.is_empty() {
+            return Err(IoError::other(
+                "chatgpt auth profile is missing access token",
+            ));
+        }
+
+        let mut client = BackendClient::new(self.config.chatgpt_base_url.clone())
+            .map_err(IoError::other)?
+            .with_user_agent(get_codex_user_agent())
+            .with_bearer_token(tokens.access_token.clone());
+
+        if let Some(account_id) = tokens
+            .account_id
+            .as_deref()
+            .or(tokens.id_token.chatgpt_account_id.as_deref())
+        {
+            client = client.with_chatgpt_account_id(account_id);
+        }
+
+        if tokens.id_token.chatgpt_account_is_fedramp {
+            client = client.with_fedramp_routing_header();
+        }
+
+        Ok(Some(client))
+    }
+
+    async fn fetch_rate_limits_with_client(
+        &self,
+        client: &BackendClient,
+    ) -> Result<
+        (
+            CoreRateLimitSnapshot,
+            HashMap<String, CoreRateLimitSnapshot>,
+        ),
+        JSONRPCErrorError,
+    > {
         let snapshots = client
             .get_rate_limits_many()
             .await

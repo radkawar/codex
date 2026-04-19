@@ -61,6 +61,8 @@ use crate::render::highlight::highlight_bash_to_lines;
 use crate::render::renderable::Renderable;
 use crate::resume_picker::SessionSelection;
 use crate::resume_picker::SessionTarget;
+use crate::status::StatusAccountDisplay;
+use crate::status::plan_type_display_name;
 #[cfg(test)]
 use crate::test_support::PathBufExt;
 #[cfg(test)]
@@ -2075,6 +2077,50 @@ impl App {
                 .await
                 .map_err(|err| err.to_string());
             app_event_tx.send(AppEvent::RateLimitsLoaded { origin, result });
+        });
+    }
+
+    fn list_auth_profiles(&mut self, app_server: &AppServerSession) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = list_auth_profiles(request_handle)
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::AuthProfilesLoaded { result });
+        });
+    }
+
+    fn save_auth_profile(&mut self, app_server: &AppServerSession, name: String, overwrite: bool) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = save_auth_profile(request_handle, name, overwrite)
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::AuthProfileSaved { result });
+        });
+    }
+
+    fn activate_auth_profile(&mut self, app_server: &AppServerSession, name: String) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = activate_auth_profile(request_handle, name)
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::AuthProfileActivated { result });
+        });
+    }
+
+    fn delete_auth_profile(&mut self, app_server: &AppServerSession, name: String) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = delete_auth_profile(request_handle, name)
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::AuthProfileDeleted { result });
         });
     }
 
@@ -4932,6 +4978,57 @@ impl App {
             AppEvent::RefreshRateLimits { origin } => {
                 self.refresh_rate_limits(app_server, origin);
             }
+            AppEvent::ListAuthProfiles => {
+                self.list_auth_profiles(app_server);
+            }
+            AppEvent::SaveAuthProfile { name, overwrite } => {
+                self.save_auth_profile(app_server, name, overwrite);
+            }
+            AppEvent::ActivateAuthProfile { name } => {
+                self.activate_auth_profile(app_server, name);
+            }
+            AppEvent::DeleteAuthProfile { name } => {
+                self.delete_auth_profile(app_server, name);
+            }
+            AppEvent::AuthProfilesLoaded { result } => {
+                self.chat_widget.add_auth_profiles_output(result);
+            }
+            AppEvent::AuthProfileSaved { result } => {
+                self.chat_widget.on_auth_profile_saved(result);
+            }
+            AppEvent::AuthProfileActivated { result } => match result {
+                Ok(response) => {
+                    let (status_account_display, plan_type, has_chatgpt_account) = match response
+                        .current_account
+                        .as_ref()
+                    {
+                        Some(codex_app_server_protocol::Account::ApiKey {}) => {
+                            (Some(StatusAccountDisplay::ApiKey), None, false)
+                        }
+                        Some(codex_app_server_protocol::Account::Chatgpt { email, plan_type }) => (
+                            Some(StatusAccountDisplay::ChatGpt {
+                                email: Some(email.clone()),
+                                plan: Some(plan_type_display_name(*plan_type)),
+                            }),
+                            Some(*plan_type),
+                            true,
+                        ),
+                        None => (None, None, false),
+                    };
+                    self.chat_widget.update_account_state(
+                        status_account_display,
+                        plan_type,
+                        has_chatgpt_account,
+                    );
+                    self.chat_widget.on_auth_profile_activated(Ok(response));
+                }
+                Err(err) => {
+                    self.chat_widget.on_auth_profile_activated(Err(err));
+                }
+            },
+            AppEvent::AuthProfileDeleted { result } => {
+                self.chat_widget.on_auth_profile_deleted(result);
+            }
             AppEvent::RateLimitsLoaded { origin, result } => match result {
                 Ok(snapshots) => {
                     for snapshot in snapshots {
@@ -6601,6 +6698,62 @@ async fn fetch_account_rate_limits(
         .wrap_err("account/rateLimits/read failed in TUI")?;
 
     Ok(app_server_rate_limit_snapshots_to_core(response))
+}
+
+async fn list_auth_profiles(
+    request_handle: AppServerRequestHandle,
+) -> Result<codex_app_server_protocol::AuthProfileListResponse> {
+    let request_id = RequestId::String(format!("auth-profile-list-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::AuthProfileList {
+            request_id,
+            params: None,
+        })
+        .await
+        .wrap_err("account/authProfile/list failed in TUI")
+}
+
+async fn save_auth_profile(
+    request_handle: AppServerRequestHandle,
+    name: String,
+    overwrite: bool,
+) -> Result<codex_app_server_protocol::AuthProfileSaveResponse> {
+    let request_id = RequestId::String(format!("auth-profile-save-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::AuthProfileSave {
+            request_id,
+            params: codex_app_server_protocol::AuthProfileSaveParams { name, overwrite },
+        })
+        .await
+        .wrap_err("account/authProfile/save failed in TUI")
+}
+
+async fn activate_auth_profile(
+    request_handle: AppServerRequestHandle,
+    name: String,
+) -> Result<codex_app_server_protocol::AuthProfileActivateResponse> {
+    let request_id = RequestId::String(format!("auth-profile-activate-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::AuthProfileActivate {
+            request_id,
+            params: codex_app_server_protocol::AuthProfileActivateParams { name },
+        })
+        .await
+        .wrap_err("account/authProfile/activate failed in TUI")
+}
+
+async fn delete_auth_profile(
+    request_handle: AppServerRequestHandle,
+    name: String,
+) -> Result<codex_app_server_protocol::AuthProfileDeleteResponse> {
+    let request_id = RequestId::String(format!("auth-profile-delete-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::AuthProfileDelete {
+            request_id,
+            params: codex_app_server_protocol::AuthProfileDeleteParams { name },
+        })
+        .await
+        .wrap_err("account/authProfile/delete failed in TUI")
 }
 
 async fn fetch_skills_list(

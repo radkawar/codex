@@ -38,6 +38,9 @@ pub enum SlashCommand {
     Diff,
     Mention,
     Status,
+    Accounts,
+    Account,
+    Loop,
     DebugConfig,
     Title,
     Statusline,
@@ -87,6 +90,11 @@ impl SlashCommand {
             SlashCommand::Mention => "mention a file",
             SlashCommand::Skills => "use skills to improve how Codex performs specific tasks",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::Accounts => "list saved auth profiles",
+            SlashCommand::Account => "manage saved auth profiles and switch auth",
+            SlashCommand::Loop => {
+                "configure an automatic follow-up after successful turn completion"
+            }
             SlashCommand::DebugConfig => "show config layers and requirement sources for debugging",
             SlashCommand::Title => "configure which items appear in the terminal title",
             SlashCommand::Statusline => "configure which items appear in the status line",
@@ -136,6 +144,8 @@ impl SlashCommand {
                 | SlashCommand::Fast
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
+                | SlashCommand::Account
+                | SlashCommand::Loop
         )
     }
 
@@ -162,13 +172,16 @@ impl SlashCommand {
             | SlashCommand::Clear
             | SlashCommand::Logout
             | SlashCommand::MemoryDrop
-            | SlashCommand::MemoryUpdate => false,
+            | SlashCommand::MemoryUpdate
+            | SlashCommand::Account => false,
             SlashCommand::Diff
             | SlashCommand::Copy
             | SlashCommand::Rename
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Status
+            | SlashCommand::Accounts
+            | SlashCommand::Loop
             | SlashCommand::DebugConfig
             | SlashCommand::Ps
             | SlashCommand::Stop

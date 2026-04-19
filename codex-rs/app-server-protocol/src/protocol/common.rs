@@ -585,6 +585,22 @@ client_request_definitions! {
         params: v2::GetAccountParams,
         response: v2::GetAccountResponse,
     },
+    AuthProfileList => "account/authProfile/list" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::AuthProfileListResponse,
+    },
+    AuthProfileSave => "account/authProfile/save" {
+        params: v2::AuthProfileSaveParams,
+        response: v2::AuthProfileSaveResponse,
+    },
+    AuthProfileActivate => "account/authProfile/activate" {
+        params: v2::AuthProfileActivateParams,
+        response: v2::AuthProfileActivateResponse,
+    },
+    AuthProfileDelete => "account/authProfile/delete" {
+        params: v2::AuthProfileDeleteParams,
+        response: v2::AuthProfileDeleteResponse,
+    },
 
     /// DEPRECATED APIs below
     GetConversationSummary {
