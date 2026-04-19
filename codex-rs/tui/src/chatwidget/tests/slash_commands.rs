@@ -217,6 +217,41 @@ async fn slash_account_delete_emits_app_event() {
 }
 
 #[tokio::test]
+async fn slash_account_next_emits_app_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/account next");
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::ActivateNextAuthProfile { trigger })
+            if trigger == crate::app_event::AuthProfileSwitchTrigger::ManualNext
+    );
+}
+
+#[tokio::test]
+async fn slash_account_autoswitch_off_updates_runtime_setting() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/account autoswitch off");
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(cells.last().expect("autoswitch status cell"));
+    assert!(
+        rendered.contains("Automatic auth switching on rate limits disabled for this session."),
+        "expected autoswitch-off message, got: {rendered:?}"
+    );
+
+    submit_composer_text(&mut chat, "/account autoswitch status");
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(cells.last().expect("autoswitch status cell"));
+    assert!(
+        rendered.contains("Automatic auth switching on rate limits is off for this session."),
+        "expected autoswitch status, got: {rendered:?}"
+    );
+}
+
+#[tokio::test]
 async fn slash_prime_bare_reads_status() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -266,6 +301,7 @@ async fn auth_profiles_output_renders_table_with_reset_columns() {
                 }),
                 credits: None,
                 plan_type: None,
+                rate_limit_reached_type: None,
             }),
             active: true,
         }],
@@ -356,6 +392,7 @@ async fn account_priming_run_output_has_stable_snapshot() {
                             }),
                             credits: None,
                             plan_type: None,
+                            rate_limit_reached_type: None,
                         }),
                         after_rate_limits: None,
                         error: None,
@@ -435,7 +472,7 @@ async fn loop_once_runs_after_successful_turn_completion() {
 }
 
 #[tokio::test]
-async fn usage_limit_error_disables_loop() {
+async fn usage_limit_error_requests_auto_switch_and_disables_loop_if_switch_fails() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     submit_composer_text(&mut chat, "/loop always keep going");
@@ -449,6 +486,18 @@ async fn usage_limit_error_disables_loop() {
         }),
     });
 
+    assert_matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_)));
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::ActivateNextAuthProfile { trigger })
+            if trigger == crate::app_event::AuthProfileSwitchTrigger::RateLimit
+    );
+
+    chat.on_auth_profile_next_activated(
+        crate::app_event::AuthProfileSwitchTrigger::RateLimit,
+        Err("no alternative auth profile with available ChatGPT capacity".to_string()),
+    );
+
     let cells = drain_insert_history(&mut rx);
     let rendered = cells
         .iter()
@@ -459,6 +508,38 @@ async fn usage_limit_error_disables_loop() {
         rendered.contains("Loop disabled after a rate limit or quota error."),
         "expected loop disable warning, got: {rendered:?}"
     );
+    assert!(
+        rendered.contains("Failed to automatically switch auth profile after rate limit"),
+        "expected automatic switch failure message, got: {rendered:?}"
+    );
+
+    chat.dispatch_command(SlashCommand::Loop);
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(cells.last().expect("loop status cell"));
+    assert!(rendered.contains("Loop is off."), "expected loop to be off");
+}
+
+#[tokio::test]
+async fn usage_limit_error_with_autoswitch_off_does_not_request_switch() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/account autoswitch off");
+    let _ = drain_insert_history(&mut rx);
+
+    submit_composer_text(&mut chat, "/loop always keep going");
+    let _ = drain_insert_history(&mut rx);
+
+    chat.handle_codex_event(Event {
+        id: "limit-error".into(),
+        msg: EventMsg::Error(ErrorEvent {
+            message: "limit hit".to_string(),
+            codex_error_info: Some(CodexErrorInfo::UsageLimitExceeded),
+        }),
+    });
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_)));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::InsertHistoryCell(_)));
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 
     chat.dispatch_command(SlashCommand::Loop);
     let cells = drain_insert_history(&mut rx);

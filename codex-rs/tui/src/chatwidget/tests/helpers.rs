@@ -247,6 +247,7 @@ pub(super) async fn make_chatwidget_manual(
         retry_status_header: None,
         pending_status_indicator_restore: false,
         suppress_queue_autosend: false,
+        auto_switch_auth_profile_on_rate_limit: true,
         thread_id: None,
         last_turn_id: None,
         thread_name: None,

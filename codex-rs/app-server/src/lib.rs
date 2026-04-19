@@ -66,6 +66,7 @@ use tracing_subscriber::util::SubscriberInitExt;
 
 mod account_priming;
 mod app_server_tracing;
+mod auth_profile_rotation;
 mod auth_profiles;
 mod bespoke_event_handling;
 mod codex_message_processor;

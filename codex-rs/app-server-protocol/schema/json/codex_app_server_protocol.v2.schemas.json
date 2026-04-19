@@ -328,6 +328,16 @@
             }
           ]
         },
+        "currentAccount": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Account"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "planType": {
           "anyOf": [
             {
@@ -956,6 +966,29 @@
           "type": "string"
         }
       ]
+    },
+    "AuthProfileActivateNextResponse": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "properties": {
+        "currentAccount": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Account"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "profile": {
+          "$ref": "#/definitions/AuthProfileSummary"
+        }
+      },
+      "required": [
+        "profile"
+      ],
+      "title": "AuthProfileActivateNextResponse",
+      "type": "object"
     },
     "AuthProfileActivateParams": {
       "$schema": "http://json-schema.org/draft-07/schema#",
@@ -2791,6 +2824,29 @@
             "params"
           ],
           "title": "Account/authProfile/activateRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/RequestId"
+            },
+            "method": {
+              "enum": [
+                "account/authProfile/activateNext"
+              ],
+              "title": "Account/authProfile/activateNextRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "Account/authProfile/activateNextRequest",
           "type": "object"
         },
         {

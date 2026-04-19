@@ -570,6 +570,7 @@ mod tests {
             }),
             credits: None,
             plan_type: None,
+            rate_limit_reached_type: None,
         }
     }
 

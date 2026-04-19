@@ -649,6 +649,7 @@ pub(crate) struct OutgoingError {
 mod tests {
     use std::time::Duration;
 
+    use codex_app_server_protocol::Account;
     use codex_app_server_protocol::AccountLoginCompletedNotification;
     use codex_app_server_protocol::AccountRateLimitsUpdatedNotification;
     use codex_app_server_protocol::AccountUpdatedNotification;
@@ -769,8 +770,12 @@ mod tests {
     #[test]
     fn verify_account_updated_notification_serialization() {
         let notification = ServerNotification::AccountUpdated(AccountUpdatedNotification {
-            auth_mode: Some(AuthMode::ApiKey),
-            plan_type: None,
+            auth_mode: Some(AuthMode::Chatgpt),
+            plan_type: Some(PlanType::Pro),
+            current_account: Some(Account::Chatgpt {
+                email: "example@example.com".to_string(),
+                plan_type: PlanType::Pro,
+            }),
         });
 
         let jsonrpc_notification = OutgoingMessage::AppServerNotification(notification);
@@ -778,8 +783,13 @@ mod tests {
             json!({
                 "method": "account/updated",
                 "params": {
-                    "authMode": "apikey",
-                    "planType": null
+                    "authMode": "chatgpt",
+                    "planType": "pro",
+                    "currentAccount": {
+                        "type": "chatgpt",
+                        "email": "example@example.com",
+                        "planType": "pro"
+                    }
                 },
             }),
             serde_json::to_value(jsonrpc_notification)

@@ -5,6 +5,50 @@
       "description": "A path that is guaranteed to be absolute and normalized (though it is not guaranteed to be canonicalized or exist on the filesystem).\n\nIMPORTANT: When deserializing an `AbsolutePathBuf`, a base path must be set using [AbsolutePathBufGuard::new]. If no base path is set, the deserialization will fail unless the path being deserialized is already absolute.",
       "type": "string"
     },
+    "Account": {
+      "oneOf": [
+        {
+          "properties": {
+            "type": {
+              "enum": [
+                "apiKey"
+              ],
+              "title": "ApiKeyAccountType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ],
+          "title": "ApiKeyAccount",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "email": {
+              "type": "string"
+            },
+            "planType": {
+              "$ref": "#/definitions/PlanType"
+            },
+            "type": {
+              "enum": [
+                "chatgpt"
+              ],
+              "title": "ChatgptAccountType",
+              "type": "string"
+            }
+          },
+          "required": [
+            "email",
+            "planType",
+            "type"
+          ],
+          "title": "ChatgptAccount",
+          "type": "object"
+        }
+      ]
+    },
     "AccountLoginCompletedNotification": {
       "properties": {
         "error": {
@@ -45,6 +89,16 @@
           "anyOf": [
             {
               "$ref": "#/definitions/AuthMode"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "currentAccount": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Account"
             },
             {
               "type": "null"

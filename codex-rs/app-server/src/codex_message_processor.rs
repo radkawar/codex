@@ -1,5 +1,8 @@
 use crate::account_priming::AccountPrimingController;
 use crate::account_priming::DEFAULT_ACCOUNT_PRIMING_INTERVAL_SECONDS;
+use crate::auth_profile_rotation::select_next_auth_profile;
+use crate::auth_profiles::account_from_auth;
+use crate::auth_profiles::auth_mode_from_auth;
 use crate::auth_profiles::delete_auth_profile;
 use crate::auth_profiles::list_auth_profiles;
 use crate::auth_profiles::load_auth_profile;
@@ -48,6 +51,7 @@ use codex_app_server_protocol::AppsListResponse;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::AuthMode as CoreAuthMode;
+use codex_app_server_protocol::AuthProfileActivateNextResponse;
 use codex_app_server_protocol::AuthProfileActivateParams;
 use codex_app_server_protocol::AuthProfileActivateResponse;
 use codex_app_server_protocol::AuthProfileDeleteParams;
@@ -55,6 +59,7 @@ use codex_app_server_protocol::AuthProfileDeleteResponse;
 use codex_app_server_protocol::AuthProfileListResponse;
 use codex_app_server_protocol::AuthProfileSaveParams;
 use codex_app_server_protocol::AuthProfileSaveResponse;
+use codex_app_server_protocol::AuthProfileSummary;
 use codex_app_server_protocol::CancelLoginAccountParams;
 use codex_app_server_protocol::CancelLoginAccountResponse;
 use codex_app_server_protocol::CancelLoginAccountStatus;
@@ -686,11 +691,27 @@ impl CodexMessageProcessor {
     }
 
     fn current_account_updated_notification(&self) -> AccountUpdatedNotification {
-        let auth = self.auth_manager.auth_cached();
+        let (current_account, auth_mode) = self.current_account_and_auth_mode();
         AccountUpdatedNotification {
-            auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
-            plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
+            auth_mode,
+            plan_type: current_account.as_ref().and_then(|account| match account {
+                Account::Chatgpt { plan_type, .. } => Some(*plan_type),
+                Account::ApiKey {} => None,
+            }),
+            current_account,
         }
+    }
+
+    fn current_account_and_auth_mode(&self) -> (Option<Account>, Option<AuthMode>) {
+        if let Ok(Some(auth)) = self.current_auth_dot_json() {
+            return (account_from_auth(&auth), Some(auth_mode_from_auth(&auth)));
+        }
+
+        let auth = self.auth_manager.auth_cached();
+        (
+            auth.as_ref().and_then(account_from_codex_auth),
+            auth.as_ref().map(CodexAuth::api_auth_mode),
+        )
     }
 
     fn track_error_response(
@@ -1173,6 +1194,13 @@ impl CodexMessageProcessor {
                 self.activate_auth_profile_v2(to_connection_request_id(request_id), params)
                     .await;
             }
+            ClientRequest::AuthProfileActivateNext {
+                request_id,
+                params: _,
+            } => {
+                self.activate_next_auth_profile_v2(to_connection_request_id(request_id))
+                    .await;
+            }
             ClientRequest::AuthProfileDelete { request_id, params } => {
                 self.delete_auth_profile_v2(to_connection_request_id(request_id), params)
                     .await;
@@ -1525,6 +1553,7 @@ impl CodexMessageProcessor {
                             let payload_v2 = AccountUpdatedNotification {
                                 auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
                                 plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
+                                current_account: auth.as_ref().and_then(account_from_codex_auth),
                             };
                             outgoing_clone
                                 .send_server_notification(ServerNotification::AccountUpdated(
@@ -1638,6 +1667,7 @@ impl CodexMessageProcessor {
                             let payload_v2 = AccountUpdatedNotification {
                                 auth_mode: auth.as_ref().map(CodexAuth::api_auth_mode),
                                 plan_type: auth.as_ref().and_then(CodexAuth::account_plan_type),
+                                current_account: auth.as_ref().and_then(account_from_codex_auth),
                             };
                             outgoing_clone
                                 .send_server_notification(ServerNotification::AccountUpdated(
@@ -1832,6 +1862,7 @@ impl CodexMessageProcessor {
                 let payload_v2 = AccountUpdatedNotification {
                     auth_mode: current_auth_method,
                     plan_type: None,
+                    current_account: None,
                 };
                 self.outgoing
                     .send_server_notification(ServerNotification::AccountUpdated(payload_v2))
@@ -1936,33 +1967,20 @@ impl CodexMessageProcessor {
             return;
         }
 
-        let account = match self.auth_manager.auth_cached() {
-            Some(auth) => match auth.auth_mode() {
-                CoreAuthMode::ApiKey => Some(Account::ApiKey {}),
-                CoreAuthMode::Chatgpt | CoreAuthMode::ChatgptAuthTokens => {
-                    let email = auth.get_account_email();
-                    let plan_type = auth.account_plan_type();
-
-                    match (email, plan_type) {
-                        (Some(email), Some(plan_type)) => {
-                            Some(Account::Chatgpt { email, plan_type })
-                        }
-                        _ => {
-                            let error = JSONRPCErrorError {
-                                code: INVALID_REQUEST_ERROR_CODE,
-                                message:
-                                    "email and plan type are required for chatgpt authentication"
-                                        .to_string(),
-                                data: None,
-                            };
-                            self.outgoing.send_error(request_id, error).await;
-                            return;
-                        }
-                    }
-                }
-            },
-            None => None,
-        };
+        let (account, auth_mode) = self.current_account_and_auth_mode();
+        if matches!(
+            auth_mode,
+            Some(CoreAuthMode::Chatgpt | CoreAuthMode::ChatgptAuthTokens)
+        ) && account.is_none()
+        {
+            let error = JSONRPCErrorError {
+                code: INVALID_REQUEST_ERROR_CODE,
+                message: "email and plan type are required for chatgpt authentication".to_string(),
+                data: None,
+            };
+            self.outgoing.send_error(request_id, error).await;
+            return;
+        }
 
         let response = GetAccountResponse {
             account,
@@ -2033,32 +2051,17 @@ impl CodexMessageProcessor {
             }
         };
 
-        match list_auth_profiles(&self.config.codex_home, current_auth.as_ref()) {
-            Ok(mut profiles) => {
-                for profile in &mut profiles {
-                    let Ok(auth) = load_auth_profile(&self.config.codex_home, &profile.name) else {
-                        continue;
-                    };
-                    profile.rate_limits = self
-                        .cached_rate_limits_for_profile(&profile.name, &auth)
-                        .await
-                        .map(Into::into);
-                }
+        match self
+            .load_auth_profiles_with_rate_limits(current_auth.as_ref())
+            .await
+        {
+            Ok(profiles) => {
                 self.outgoing
                     .send_response(request_id, AuthProfileListResponse { profiles })
                     .await;
             }
-            Err(err) => {
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        JSONRPCErrorError {
-                            code: INTERNAL_ERROR_CODE,
-                            message: format!("failed to list auth profiles: {err}"),
-                            data: None,
-                        },
-                    )
-                    .await;
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
             }
         }
     }
@@ -2134,36 +2137,100 @@ impl CodexMessageProcessor {
         request_id: ConnectionRequestId,
         params: AuthProfileActivateParams,
     ) {
-        let profile_auth = match load_auth_profile(&self.config.codex_home, &params.name) {
+        match self.activate_auth_profile_by_name(&params.name).await {
+            Ok(response) => {
+                self.outgoing.send_response(request_id, response).await;
+            }
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        }
+        self.outgoing
+            .send_server_notification(ServerNotification::AccountUpdated(
+                self.current_account_updated_notification(),
+            ))
+            .await;
+    }
+
+    async fn activate_next_auth_profile_v2(&self, request_id: ConnectionRequestId) {
+        let current_auth = match self.current_auth_dot_json() {
             Ok(auth) => auth,
-            Err(err) => {
-                let code = if err.kind() == std::io::ErrorKind::NotFound {
-                    INVALID_REQUEST_ERROR_CODE
-                } else if err.kind() == std::io::ErrorKind::InvalidInput {
-                    INVALID_PARAMS_ERROR_CODE
-                } else {
-                    INTERNAL_ERROR_CODE
-                };
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        JSONRPCErrorError {
-                            code,
-                            message: format!("failed to load auth profile: {err}"),
-                            data: None,
-                        },
-                    )
-                    .await;
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
                 return;
             }
         };
 
-        // Switching profiles should replace the active auth, not leave a lower-precedence fallback
-        // behind in another store.
-        if let Err(error) = self.clear_all_auth_storage() {
-            self.outgoing.send_error(request_id, error).await;
+        let profiles = match self
+            .load_auth_profiles_with_rate_limits(current_auth.as_ref())
+            .await
+        {
+            Ok(profiles) => profiles,
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
+        };
+        let Some(profile) = select_next_auth_profile(&profiles) else {
+            self.outgoing
+                .send_error(
+                    request_id,
+                    JSONRPCErrorError {
+                        code: INVALID_REQUEST_ERROR_CODE,
+                        message: "no alternative auth profile with available ChatGPT capacity"
+                            .to_string(),
+                        data: None,
+                    },
+                )
+                .await;
             return;
+        };
+
+        match self.activate_auth_profile_by_name(&profile.name).await {
+            Ok(response) => {
+                self.outgoing
+                    .send_response(
+                        request_id,
+                        AuthProfileActivateNextResponse {
+                            profile: response.profile,
+                            current_account: response.current_account,
+                        },
+                    )
+                    .await;
+            }
+            Err(error) => {
+                self.outgoing.send_error(request_id, error).await;
+                return;
+            }
         }
+        self.outgoing
+            .send_server_notification(ServerNotification::AccountUpdated(
+                self.current_account_updated_notification(),
+            ))
+            .await;
+    }
+
+    async fn activate_auth_profile_by_name(
+        &self,
+        name: &str,
+    ) -> Result<AuthProfileActivateResponse, JSONRPCErrorError> {
+        let profile_auth = load_auth_profile(&self.config.codex_home, name).map_err(|err| {
+            let code = if err.kind() == std::io::ErrorKind::NotFound {
+                INVALID_REQUEST_ERROR_CODE
+            } else if err.kind() == std::io::ErrorKind::InvalidInput {
+                INVALID_PARAMS_ERROR_CODE
+            } else {
+                INTERNAL_ERROR_CODE
+            };
+            JSONRPCErrorError {
+                code,
+                message: format!("failed to load auth profile: {err}"),
+                data: None,
+            }
+        })?;
+
+        self.clear_all_auth_storage()?;
 
         let target_store_mode = if matches!(
             profile_auth.auth_mode,
@@ -2174,21 +2241,13 @@ impl CodexMessageProcessor {
             self.config.cli_auth_credentials_store_mode
         };
 
-        if let Err(err) =
-            codex_login::save_auth(&self.config.codex_home, &profile_auth, target_store_mode)
-        {
-            self.outgoing
-                .send_error(
-                    request_id,
-                    JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: format!("failed to activate auth profile: {err}"),
-                        data: None,
-                    },
-                )
-                .await;
-            return;
-        }
+        codex_login::save_auth(&self.config.codex_home, &profile_auth, target_store_mode).map_err(
+            |err| JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: format!("failed to activate auth profile: {err}"),
+                data: None,
+            },
+        )?;
 
         self.auth_manager.reload();
         replace_cloud_requirements_loader(
@@ -2201,75 +2260,48 @@ impl CodexMessageProcessor {
         sync_default_client_residency_requirement(&cli_overrides, self.cloud_requirements.as_ref())
             .await;
 
-        let current_auth = match self.current_auth_dot_json() {
-            Ok(auth) => auth,
-            Err(error) => {
-                self.outgoing.send_error(request_id, error).await;
-                return;
-            }
-        };
-        let profiles = match list_auth_profiles(&self.config.codex_home, current_auth.as_ref()) {
-            Ok(profiles) => profiles,
-            Err(err) => {
-                self.outgoing
-                    .send_error(
-                        request_id,
-                        JSONRPCErrorError {
-                            code: INTERNAL_ERROR_CODE,
-                            message: format!("failed to refresh auth profile state: {err}"),
-                            data: None,
-                        },
-                    )
-                    .await;
-                return;
-            }
-        };
-        let Some(profile) = profiles
-            .into_iter()
-            .find(|profile| profile.name == params.name)
-        else {
-            self.outgoing
-                .send_error(
-                    request_id,
-                    JSONRPCErrorError {
-                        code: INTERNAL_ERROR_CODE,
-                        message: "activated auth profile disappeared unexpectedly".to_string(),
-                        data: None,
-                    },
-                )
-                .await;
-            return;
+        let current_auth = self.current_auth_dot_json()?;
+        let profiles = self
+            .load_auth_profiles_with_rate_limits(current_auth.as_ref())
+            .await?;
+        let Some(profile) = profiles.into_iter().find(|profile| profile.name == name) else {
+            return Err(JSONRPCErrorError {
+                code: INTERNAL_ERROR_CODE,
+                message: "activated auth profile disappeared unexpectedly".to_string(),
+                data: None,
+            });
         };
 
-        let current_account = match self.auth_manager.auth_cached() {
-            Some(auth) => match auth.auth_mode() {
-                CoreAuthMode::ApiKey => Some(Account::ApiKey {}),
-                CoreAuthMode::Chatgpt | CoreAuthMode::ChatgptAuthTokens => {
-                    match (auth.get_account_email(), auth.account_plan_type()) {
-                        (Some(email), Some(plan_type)) => {
-                            Some(Account::Chatgpt { email, plan_type })
-                        }
-                        _ => None,
-                    }
+        Ok(AuthProfileActivateResponse {
+            current_account: profile.account.clone(),
+            profile,
+        })
+    }
+
+    async fn load_auth_profiles_with_rate_limits(
+        &self,
+        current_auth: Option<&AuthDotJson>,
+    ) -> Result<Vec<AuthProfileSummary>, JSONRPCErrorError> {
+        let mut profiles =
+            list_auth_profiles(&self.config.codex_home, current_auth).map_err(|err| {
+                JSONRPCErrorError {
+                    code: INTERNAL_ERROR_CODE,
+                    message: format!("failed to list auth profiles: {err}"),
+                    data: None,
                 }
-            },
-            None => None,
-        };
+            })?;
 
-        self.outgoing
-            .send_response(
-                request_id,
-                AuthProfileActivateResponse {
-                    profile,
-                    current_account,
-                },
-            )
-            .await;
-        self.outgoing
-            .send_server_notification(ServerNotification::AccountUpdated(
-                self.current_account_updated_notification(),
-            ))
-            .await;
+        for profile in &mut profiles {
+            let Ok(auth) = load_auth_profile(&self.config.codex_home, &profile.name) else {
+                continue;
+            };
+            profile.rate_limits = self
+                .cached_rate_limits_for_profile(&profile.name, &auth)
+                .await
+                .map(Into::into);
+        }
+
+        Ok(profiles)
     }
 
     async fn delete_auth_profile_v2(
@@ -9241,6 +9273,18 @@ impl CodexMessageProcessor {
                 warn!("failed to resolve rollout path for thread_id={conversation_id}: {err}");
                 None
             })
+    }
+}
+
+fn account_from_codex_auth(auth: &CodexAuth) -> Option<Account> {
+    match auth.auth_mode() {
+        CoreAuthMode::ApiKey => Some(Account::ApiKey {}),
+        CoreAuthMode::Chatgpt | CoreAuthMode::ChatgptAuthTokens => {
+            match (auth.get_account_email(), auth.account_plan_type()) {
+                (Some(email), Some(plan_type)) => Some(Account::Chatgpt { email, plan_type }),
+                _ => None,
+            }
+        }
     }
 }
 

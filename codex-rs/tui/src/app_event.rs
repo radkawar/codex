@@ -15,6 +15,7 @@ use codex_app_server_protocol::AccountPrimingRunOnceResponse;
 use codex_app_server_protocol::AccountPrimingStartResponse;
 use codex_app_server_protocol::AccountPrimingStopResponse;
 use codex_app_server_protocol::AppInfo;
+use codex_app_server_protocol::AuthProfileActivateNextResponse;
 use codex_app_server_protocol::AuthProfileActivateResponse;
 use codex_app_server_protocol::AuthProfileDeleteResponse;
 use codex_app_server_protocol::AuthProfileListResponse;
@@ -102,6 +103,12 @@ pub(crate) enum RateLimitRefreshOrigin {
     /// User-initiated via `/status`; the `request_id` correlates with the
     /// status card that should be updated when the fetch completes.
     StatusCommand { request_id: u64 },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AuthProfileSwitchTrigger {
+    ManualNext,
+    RateLimit,
 }
 
 #[allow(clippy::large_enum_variant)]
@@ -199,6 +206,11 @@ pub(crate) enum AppEvent {
         name: String,
     },
 
+    /// Activate the next most suitable auth profile.
+    ActivateNextAuthProfile {
+        trigger: AuthProfileSwitchTrigger,
+    },
+
     /// Delete a named auth profile.
     DeleteAuthProfile {
         name: String,
@@ -231,6 +243,12 @@ pub(crate) enum AppEvent {
     /// Result of activating an auth profile.
     AuthProfileActivated {
         result: Result<AuthProfileActivateResponse, String>,
+    },
+
+    /// Result of activating the next auth profile.
+    AuthProfileNextActivated {
+        trigger: AuthProfileSwitchTrigger,
+        result: Result<AuthProfileActivateNextResponse, String>,
     },
 
     /// Result of deleting an auth profile.

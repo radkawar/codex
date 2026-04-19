@@ -597,6 +597,10 @@ client_request_definitions! {
         params: v2::AuthProfileActivateParams,
         response: v2::AuthProfileActivateResponse,
     },
+    AuthProfileActivateNext => "account/authProfile/activateNext" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::AuthProfileActivateNextResponse,
+    },
     AuthProfileDelete => "account/authProfile/delete" {
         params: v2::AuthProfileDeleteParams,
         response: v2::AuthProfileDeleteResponse,

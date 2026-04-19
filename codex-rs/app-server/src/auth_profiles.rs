@@ -4,6 +4,7 @@ use std::path::Path;
 use std::path::PathBuf;
 
 use codex_app_server_protocol::Account;
+use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::AuthProfileSummary;
 use codex_login::AuthCredentialsStoreMode;
 use codex_login::AuthDotJson;
@@ -114,7 +115,7 @@ fn summary_from_auth(
     }
 }
 
-fn account_from_auth(auth: &AuthDotJson) -> Option<Account> {
+pub(crate) fn account_from_auth(auth: &AuthDotJson) -> Option<Account> {
     match resolved_auth_mode(auth) {
         ResolvedAuthMode::ApiKey => Some(Account::ApiKey {}),
         ResolvedAuthMode::Chatgpt => {
@@ -123,6 +124,19 @@ fn account_from_auth(auth: &AuthDotJson) -> Option<Account> {
             let plan_type =
                 account_plan_type_from_auth(tokens.id_token.get_chatgpt_plan_type_raw());
             Some(Account::Chatgpt { email, plan_type })
+        }
+    }
+}
+
+pub(crate) fn auth_mode_from_auth(auth: &AuthDotJson) -> AuthMode {
+    if auth.openai_api_key.is_some() || matches!(auth.auth_mode, Some(AuthMode::ApiKey)) {
+        AuthMode::ApiKey
+    } else if matches!(auth.auth_mode, Some(AuthMode::ChatgptAuthTokens)) {
+        AuthMode::ChatgptAuthTokens
+    } else {
+        match resolved_auth_mode(auth) {
+            ResolvedAuthMode::ApiKey => AuthMode::ApiKey,
+            ResolvedAuthMode::Chatgpt => AuthMode::Chatgpt,
         }
     }
 }

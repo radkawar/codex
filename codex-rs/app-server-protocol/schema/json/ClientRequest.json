@@ -5453,6 +5453,29 @@
         },
         "method": {
           "enum": [
+            "account/authProfile/activateNext"
+          ],
+          "title": "Account/authProfile/activateNextRequestMethod",
+          "type": "string"
+        },
+        "params": {
+          "type": "null"
+        }
+      },
+      "required": [
+        "id",
+        "method"
+      ],
+      "title": "Account/authProfile/activateNextRequest",
+      "type": "object"
+    },
+    {
+      "properties": {
+        "id": {
+          "$ref": "#/definitions/RequestId"
+        },
+        "method": {
+          "enum": [
             "account/authProfile/delete"
           ],
           "title": "Account/authProfile/deleteRequestMethod",

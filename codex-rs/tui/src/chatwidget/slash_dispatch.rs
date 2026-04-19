@@ -286,7 +286,7 @@ impl ChatWidget {
             }
             SlashCommand::Account => {
                 self.add_error_message(
-                    "Usage: /account [save <name> [--overwrite] | use <name> | delete <name>]"
+                    "Usage: /account [save <name> [--overwrite] | use <name> | delete <name> | next | autoswitch [on|off|status]]"
                         .to_string(),
                 );
             }
@@ -505,9 +505,60 @@ impl ChatWidget {
                         });
                         self.bottom_pane.drain_pending_submission_state();
                     }
+                    "next" => {
+                        if words.next().is_some() {
+                            self.add_error_message("Usage: /account next".to_string());
+                            return;
+                        }
+                        self.app_event_tx.send(AppEvent::ActivateNextAuthProfile {
+                            trigger: AuthProfileSwitchTrigger::ManualNext,
+                        });
+                        self.bottom_pane.drain_pending_submission_state();
+                    }
+                    "autoswitch" => {
+                        let Some(mode) = words.next() else {
+                            self.show_auth_profile_auto_switch_status();
+                            self.bottom_pane.drain_pending_submission_state();
+                            return;
+                        };
+                        if words.next().is_some() {
+                            self.add_error_message(
+                                "Usage: /account autoswitch [on|off|status]".to_string(),
+                            );
+                            return;
+                        }
+                        match mode {
+                            "on" => {
+                                self.set_auto_switch_auth_profile_on_rate_limit(true);
+                                self.add_info_message(
+                                    "Automatic auth switching on rate limits enabled for this session."
+                                        .to_string(),
+                                    /*hint*/ None,
+                                );
+                            }
+                            "off" => {
+                                self.set_auto_switch_auth_profile_on_rate_limit(false);
+                                self.add_info_message(
+                                    "Automatic auth switching on rate limits disabled for this session."
+                                        .to_string(),
+                                    /*hint*/ None,
+                                );
+                            }
+                            "status" => {
+                                self.show_auth_profile_auto_switch_status();
+                            }
+                            _ => {
+                                self.add_error_message(
+                                    "Usage: /account autoswitch [on|off|status]".to_string(),
+                                );
+                                return;
+                            }
+                        }
+                        self.bottom_pane.drain_pending_submission_state();
+                    }
                     _ => {
                         self.add_error_message(
-                            "Usage: /account [save <name> [--overwrite] | use <name> | delete <name>]"
+                            "Usage: /account [save <name> [--overwrite] | use <name> | delete <name> | next | autoswitch [on|off|status]]"
                                 .to_string(),
                         );
                     }

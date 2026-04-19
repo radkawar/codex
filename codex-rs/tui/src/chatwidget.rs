@@ -296,6 +296,7 @@ fn queued_message_edit_binding_for_terminal(terminal_info: TerminalInfo) -> KeyB
 }
 
 use crate::app_event::AppEvent;
+use crate::app_event::AuthProfileSwitchTrigger;
 use crate::app_event::ConnectorsSnapshot;
 use crate::app_event::ExitMode;
 use crate::app_event::RateLimitRefreshOrigin;
@@ -869,6 +870,7 @@ pub(crate) struct ChatWidget {
     // Set when commentary output completes; once stream queues go idle we restore the status row.
     pending_status_indicator_restore: bool,
     suppress_queue_autosend: bool,
+    auto_switch_auth_profile_on_rate_limit: bool,
     thread_id: Option<ThreadId>,
     last_turn_id: Option<String>,
     thread_name: Option<String>,
@@ -2849,6 +2851,38 @@ impl ChatWidget {
         self.maybe_send_next_queued_input();
     }
 
+    fn request_next_auth_profile(&mut self, trigger: AuthProfileSwitchTrigger) {
+        if matches!(trigger, AuthProfileSwitchTrigger::RateLimit) {
+            self.set_queue_autosend_suppressed(/*suppressed*/ true);
+        }
+        self.app_event_tx
+            .send(AppEvent::ActivateNextAuthProfile { trigger });
+    }
+
+    fn show_auth_profile_auto_switch_status(&mut self) {
+        let status = if self.auto_switch_auth_profile_on_rate_limit {
+            "on"
+        } else {
+            "off"
+        };
+        self.add_info_message(
+            format!("Automatic auth switching on rate limits is {status} for this session."),
+            /*hint*/ None,
+        );
+    }
+
+    fn on_rate_limit_error(&mut self, message: String) {
+        self.submit_pending_steers_after_interrupt = false;
+        self.finalize_turn();
+        self.add_to_history(history_cell::new_error_event(message));
+        if self.auto_switch_auth_profile_on_rate_limit {
+            self.request_next_auth_profile(AuthProfileSwitchTrigger::RateLimit);
+        } else {
+            self.disable_stop_loop_due_to_limit();
+        }
+        self.request_redraw();
+    }
+
     fn on_error(&mut self, message: String) {
         self.submit_pending_steers_after_interrupt = false;
         self.finalize_turn();
@@ -2875,8 +2909,7 @@ impl ChatWidget {
             match info {
                 RateLimitErrorKind::ServerOverloaded => self.on_server_overloaded_error(message),
                 RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
-                    self.disable_stop_loop_due_to_limit();
-                    self.on_error(message)
+                    self.on_rate_limit_error(message)
                 }
             }
         } else {
@@ -4915,6 +4948,7 @@ impl ChatWidget {
             retry_status_header: None,
             pending_status_indicator_restore: false,
             suppress_queue_autosend: false,
+            auto_switch_auth_profile_on_rate_limit: true,
             thread_id: None,
             last_turn_id: None,
             thread_name: None,
@@ -6737,8 +6771,7 @@ impl ChatWidget {
                             self.on_server_overloaded_error(message)
                         }
                         RateLimitErrorKind::UsageLimit | RateLimitErrorKind::Generic => {
-                            self.disable_stop_loop_due_to_limit();
-                            self.on_error(message)
+                            self.on_rate_limit_error(message)
                         }
                     }
                 } else {
@@ -7247,6 +7280,50 @@ impl ChatWidget {
                 );
             }
             Err(err) => self.add_error_message(format!("Failed to activate auth profile: {err}")),
+        }
+    }
+
+    pub(crate) fn on_auth_profile_next_activated(
+        &mut self,
+        trigger: AuthProfileSwitchTrigger,
+        result: Result<codex_app_server_protocol::AuthProfileActivateNextResponse, String>,
+    ) {
+        if matches!(trigger, AuthProfileSwitchTrigger::RateLimit) {
+            self.set_queue_autosend_suppressed(/*suppressed*/ false);
+        }
+
+        match result {
+            Ok(response) => {
+                self.clear_token_usage();
+                self.rate_limit_snapshots_by_limit_id.clear();
+                let message = match trigger {
+                    AuthProfileSwitchTrigger::ManualNext => {
+                        format!("Activated next auth profile {}", response.profile.name)
+                    }
+                    AuthProfileSwitchTrigger::RateLimit => {
+                        format!(
+                            "Rate limit hit. Switched to auth profile {}",
+                            response.profile.name
+                        )
+                    }
+                };
+                self.add_info_message(message, /*hint*/ None);
+                if matches!(trigger, AuthProfileSwitchTrigger::RateLimit) {
+                    self.maybe_send_next_queued_input();
+                }
+            }
+            Err(err) => {
+                if matches!(trigger, AuthProfileSwitchTrigger::RateLimit) {
+                    self.disable_stop_loop_due_to_limit();
+                }
+                let prefix = match trigger {
+                    AuthProfileSwitchTrigger::ManualNext => "Failed to activate next auth profile",
+                    AuthProfileSwitchTrigger::RateLimit => {
+                        "Failed to automatically switch auth profile after rate limit"
+                    }
+                };
+                self.add_error_message(format!("{prefix}: {err}"));
+            }
         }
     }
 
@@ -9445,6 +9522,10 @@ impl ChatWidget {
         if hidden {
             self.rate_limit_switch_prompt = RateLimitSwitchPromptState::Idle;
         }
+    }
+
+    pub(crate) fn set_auto_switch_auth_profile_on_rate_limit(&mut self, enabled: bool) {
+        self.auto_switch_auth_profile_on_rate_limit = enabled;
     }
 
     #[cfg_attr(not(target_os = "windows"), allow(dead_code))]

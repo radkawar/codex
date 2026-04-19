@@ -19,7 +19,10 @@ use crate::app_server_session::app_server_rate_limit_snapshot_to_core;
 use crate::app_server_session::status_account_display_from_auth_mode;
 #[cfg(test)]
 use crate::exec_command::split_command_string;
+use crate::status::StatusAccountDisplay;
+use crate::status::plan_type_display_name;
 use codex_app_server_client::AppServerEvent;
+use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::JSONRPCErrorError;
 use codex_app_server_protocol::ServerNotification;
@@ -176,13 +179,34 @@ impl App {
                 return;
             }
             ServerNotification::AccountUpdated(notification) => {
-                self.chat_widget.update_account_state(
-                    status_account_display_from_auth_mode(
+                let status_account_display = match notification.current_account.as_ref() {
+                    Some(Account::ApiKey {}) => Some(StatusAccountDisplay::ApiKey),
+                    Some(Account::Chatgpt { email, plan_type }) => {
+                        Some(StatusAccountDisplay::ChatGpt {
+                            email: Some(email.clone()),
+                            plan: Some(plan_type_display_name(*plan_type)),
+                        })
+                    }
+                    None => status_account_display_from_auth_mode(
                         notification.auth_mode,
                         notification.plan_type,
                     ),
-                    notification.plan_type,
+                };
+                let plan_type =
+                    notification
+                        .current_account
+                        .as_ref()
+                        .and_then(|account| match account {
+                            Account::Chatgpt { plan_type, .. } => Some(*plan_type),
+                            Account::ApiKey {} => None,
+                        });
+                self.chat_widget.update_account_state(
+                    status_account_display,
+                    plan_type.or(notification.plan_type),
                     matches!(
+                        notification.current_account.as_ref(),
+                        Some(Account::Chatgpt { .. })
+                    ) || matches!(
                         notification.auth_mode,
                         Some(AuthMode::Chatgpt) | Some(AuthMode::ChatgptAuthTokens)
                     ),

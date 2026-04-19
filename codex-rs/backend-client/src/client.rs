@@ -537,6 +537,15 @@ impl Client {
         window: Option<Option<Box<crate::types::RateLimitWindowSnapshot>>>,
     ) -> Option<RateLimitWindow> {
         let snapshot = window.flatten().map(|details| *details)?;
+        // The backend can return placeholder windows for untouched quotas: zero usage with the
+        // full reset duration still remaining. Treat those as inactive so callers can distinguish
+        // them from genuinely warmed windows that merely round down to 0% usage.
+        if snapshot.used_percent <= 0
+            && snapshot.limit_window_seconds > 0
+            && snapshot.reset_after_seconds >= snapshot.limit_window_seconds
+        {
+            return None;
+        }
 
         let used_percent = f64::from(snapshot.used_percent);
         let window_minutes = Self::window_minutes_from_seconds(snapshot.limit_window_seconds);
@@ -716,6 +725,66 @@ mod tests {
         assert_eq!(snapshots[0].primary, None);
         assert_eq!(snapshots[1].limit_id.as_deref(), Some("codex_other"));
         assert_eq!(snapshots[1].limit_name.as_deref(), Some("codex_other"));
+    }
+
+    #[test]
+    fn usage_payload_omits_placeholder_windows_with_full_reset_remaining() {
+        let payload = RateLimitStatusPayload {
+            plan_type: crate::types::PlanType::Pro,
+            rate_limit: Some(Some(Box::new(crate::types::RateLimitStatusDetails {
+                primary_window: Some(Some(Box::new(crate::types::RateLimitWindowSnapshot {
+                    used_percent: 0,
+                    limit_window_seconds: 300,
+                    reset_after_seconds: 300,
+                    reset_at: 123,
+                }))),
+                secondary_window: Some(Some(Box::new(crate::types::RateLimitWindowSnapshot {
+                    used_percent: 0,
+                    limit_window_seconds: 86_400,
+                    reset_after_seconds: 86_400,
+                    reset_at: 456,
+                }))),
+                ..Default::default()
+            }))),
+            additional_rate_limits: None,
+            credits: None,
+            rate_limit_reached_type: None,
+        };
+
+        let snapshots = Client::rate_limit_snapshots_from_payload(payload);
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(snapshots[0].primary, None);
+        assert_eq!(snapshots[0].secondary, None);
+    }
+
+    #[test]
+    fn usage_payload_keeps_started_windows_even_when_usage_rounds_to_zero() {
+        let payload = RateLimitStatusPayload {
+            plan_type: crate::types::PlanType::Pro,
+            rate_limit: Some(Some(Box::new(crate::types::RateLimitStatusDetails {
+                primary_window: Some(Some(Box::new(crate::types::RateLimitWindowSnapshot {
+                    used_percent: 0,
+                    limit_window_seconds: 300,
+                    reset_after_seconds: 299,
+                    reset_at: 123,
+                }))),
+                secondary_window: None,
+                ..Default::default()
+            }))),
+            additional_rate_limits: None,
+            credits: None,
+            rate_limit_reached_type: None,
+        };
+
+        let snapshots = Client::rate_limit_snapshots_from_payload(payload);
+        assert_eq!(snapshots.len(), 1);
+        assert_eq!(
+            snapshots[0]
+                .primary
+                .as_ref()
+                .map(|window| window.used_percent),
+            Some(0.0)
+        );
     }
 
     #[test]

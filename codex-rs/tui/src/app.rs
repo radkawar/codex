@@ -2,6 +2,7 @@ use crate::app_backtrack::BacktrackState;
 use crate::app_command::AppCommand;
 use crate::app_command::AppCommandView;
 use crate::app_event::AppEvent;
+use crate::app_event::AuthProfileSwitchTrigger;
 use crate::app_event::ExitMode;
 use crate::app_event::FeedbackCategory;
 use crate::app_event::RateLimitRefreshOrigin;
@@ -2110,6 +2111,21 @@ impl App {
                 .await
                 .map_err(|err| err.to_string());
             app_event_tx.send(AppEvent::AuthProfileActivated { result });
+        });
+    }
+
+    fn activate_next_auth_profile(
+        &mut self,
+        app_server: &AppServerSession,
+        trigger: AuthProfileSwitchTrigger,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = activate_next_auth_profile(request_handle)
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::AuthProfileNextActivated { trigger, result });
         });
     }
 
@@ -5035,6 +5051,9 @@ impl App {
             AppEvent::ActivateAuthProfile { name } => {
                 self.activate_auth_profile(app_server, name);
             }
+            AppEvent::ActivateNextAuthProfile { trigger } => {
+                self.activate_next_auth_profile(app_server, trigger);
+            }
             AppEvent::DeleteAuthProfile { name } => {
                 self.delete_auth_profile(app_server, name);
             }
@@ -5084,6 +5103,38 @@ impl App {
                 }
                 Err(err) => {
                     self.chat_widget.on_auth_profile_activated(Err(err));
+                }
+            },
+            AppEvent::AuthProfileNextActivated { trigger, result } => match result {
+                Ok(response) => {
+                    let (status_account_display, plan_type, has_chatgpt_account) = match response
+                        .current_account
+                        .as_ref()
+                    {
+                        Some(codex_app_server_protocol::Account::ApiKey {}) => {
+                            (Some(StatusAccountDisplay::ApiKey), None, false)
+                        }
+                        Some(codex_app_server_protocol::Account::Chatgpt { email, plan_type }) => (
+                            Some(StatusAccountDisplay::ChatGpt {
+                                email: Some(email.clone()),
+                                plan: Some(plan_type_display_name(*plan_type)),
+                            }),
+                            Some(*plan_type),
+                            true,
+                        ),
+                        None => (None, None, false),
+                    };
+                    self.chat_widget.update_account_state(
+                        status_account_display,
+                        plan_type,
+                        has_chatgpt_account,
+                    );
+                    self.chat_widget
+                        .on_auth_profile_next_activated(trigger, Ok(response));
+                }
+                Err(err) => {
+                    self.chat_widget
+                        .on_auth_profile_next_activated(trigger, Err(err));
                 }
             },
             AppEvent::AuthProfileDeleted { result } => {
@@ -6813,6 +6864,19 @@ async fn activate_auth_profile(
         })
         .await
         .wrap_err("account/authProfile/activate failed in TUI")
+}
+
+async fn activate_next_auth_profile(
+    request_handle: AppServerRequestHandle,
+) -> Result<codex_app_server_protocol::AuthProfileActivateNextResponse> {
+    let request_id = RequestId::String(format!("auth-profile-activate-next-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::AuthProfileActivateNext {
+            request_id,
+            params: None,
+        })
+        .await
+        .wrap_err("account/authProfile/activateNext failed in TUI")
 }
 
 async fn delete_auth_profile(

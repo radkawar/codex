@@ -35,6 +35,7 @@ export type { AppsDefaultConfig } from "./AppsDefaultConfig";
 export type { AppsListParams } from "./AppsListParams";
 export type { AppsListResponse } from "./AppsListResponse";
 export type { AskForApproval } from "./AskForApproval";
+export type { AuthProfileActivateNextResponse } from "./AuthProfileActivateNextResponse";
 export type { AuthProfileActivateParams } from "./AuthProfileActivateParams";
 export type { AuthProfileActivateResponse } from "./AuthProfileActivateResponse";
 export type { AuthProfileDeleteParams } from "./AuthProfileDeleteParams";
