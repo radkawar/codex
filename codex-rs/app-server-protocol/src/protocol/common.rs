@@ -601,6 +601,22 @@ client_request_definitions! {
         params: v2::AuthProfileDeleteParams,
         response: v2::AuthProfileDeleteResponse,
     },
+    AccountPrimingRead => "accountPriming/read" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::AccountPrimingReadResponse,
+    },
+    AccountPrimingStart => "accountPriming/start" {
+        params: v2::AccountPrimingStartParams,
+        response: v2::AccountPrimingStartResponse,
+    },
+    AccountPrimingStop => "accountPriming/stop" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::AccountPrimingStopResponse,
+    },
+    AccountPrimingRunOnce => "accountPriming/runOnce" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        response: v2::AccountPrimingRunOnceResponse,
+    },
 
     /// DEPRECATED APIs below
     GetConversationSummary {

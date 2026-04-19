@@ -2143,6 +2143,54 @@ impl App {
         });
     }
 
+    fn read_account_priming_status(&mut self, app_server: &AppServerSession) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = read_account_priming_status(request_handle)
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::AccountPrimingStatusLoaded { result });
+        });
+    }
+
+    fn start_account_priming(
+        &mut self,
+        app_server: &AppServerSession,
+        interval_seconds: Option<u32>,
+    ) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = start_account_priming(request_handle, interval_seconds)
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::AccountPrimingStarted { result });
+        });
+    }
+
+    fn stop_account_priming(&mut self, app_server: &AppServerSession) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = stop_account_priming(request_handle)
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::AccountPrimingStopped { result });
+        });
+    }
+
+    fn run_account_priming_once(&mut self, app_server: &AppServerSession) {
+        let request_handle = app_server.request_handle();
+        let app_event_tx = self.app_event_tx.clone();
+        tokio::spawn(async move {
+            let result = run_account_priming_once(request_handle)
+                .await
+                .map_err(|err| err.to_string());
+            app_event_tx.send(AppEvent::AccountPrimingRunOnceCompleted { result });
+        });
+    }
+
     fn fetch_plugins_list(&mut self, app_server: &AppServerSession, cwd: PathBuf) {
         let request_handle = app_server.request_handle();
         let app_event_tx = self.app_event_tx.clone();
@@ -4990,6 +5038,18 @@ impl App {
             AppEvent::DeleteAuthProfile { name } => {
                 self.delete_auth_profile(app_server, name);
             }
+            AppEvent::ReadAccountPrimingStatus => {
+                self.read_account_priming_status(app_server);
+            }
+            AppEvent::StartAccountPriming { interval_seconds } => {
+                self.start_account_priming(app_server, interval_seconds);
+            }
+            AppEvent::StopAccountPriming => {
+                self.stop_account_priming(app_server);
+            }
+            AppEvent::RunAccountPrimingOnce => {
+                self.run_account_priming_once(app_server);
+            }
             AppEvent::AuthProfilesLoaded { result } => {
                 self.chat_widget.add_auth_profiles_output(result);
             }
@@ -5028,6 +5088,19 @@ impl App {
             },
             AppEvent::AuthProfileDeleted { result } => {
                 self.chat_widget.on_auth_profile_deleted(result);
+            }
+            AppEvent::AccountPrimingStatusLoaded { result } => {
+                self.chat_widget.on_account_priming_status_loaded(result);
+            }
+            AppEvent::AccountPrimingStarted { result } => {
+                self.chat_widget.on_account_priming_started(result);
+            }
+            AppEvent::AccountPrimingStopped { result } => {
+                self.chat_widget.on_account_priming_stopped(result);
+            }
+            AppEvent::AccountPrimingRunOnceCompleted { result } => {
+                self.chat_widget
+                    .on_account_priming_run_once_completed(result);
             }
             AppEvent::RateLimitsLoaded { origin, result } => match result {
                 Ok(snapshots) => {
@@ -6774,6 +6847,59 @@ async fn fetch_skills_list(
         })
         .await
         .wrap_err("skills/list failed in TUI")
+}
+
+async fn read_account_priming_status(
+    request_handle: AppServerRequestHandle,
+) -> Result<codex_app_server_protocol::AccountPrimingReadResponse> {
+    let request_id = RequestId::String(format!("account-priming-read-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::AccountPrimingRead {
+            request_id,
+            params: None,
+        })
+        .await
+        .wrap_err("accountPriming/read failed in TUI")
+}
+
+async fn start_account_priming(
+    request_handle: AppServerRequestHandle,
+    interval_seconds: Option<u32>,
+) -> Result<codex_app_server_protocol::AccountPrimingStartResponse> {
+    let request_id = RequestId::String(format!("account-priming-start-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::AccountPrimingStart {
+            request_id,
+            params: codex_app_server_protocol::AccountPrimingStartParams { interval_seconds },
+        })
+        .await
+        .wrap_err("accountPriming/start failed in TUI")
+}
+
+async fn stop_account_priming(
+    request_handle: AppServerRequestHandle,
+) -> Result<codex_app_server_protocol::AccountPrimingStopResponse> {
+    let request_id = RequestId::String(format!("account-priming-stop-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::AccountPrimingStop {
+            request_id,
+            params: None,
+        })
+        .await
+        .wrap_err("accountPriming/stop failed in TUI")
+}
+
+async fn run_account_priming_once(
+    request_handle: AppServerRequestHandle,
+) -> Result<codex_app_server_protocol::AccountPrimingRunOnceResponse> {
+    let request_id = RequestId::String(format!("account-priming-run-once-{}", Uuid::new_v4()));
+    request_handle
+        .request_typed(ClientRequest::AccountPrimingRunOnce {
+            request_id,
+            params: None,
+        })
+        .await
+        .wrap_err("accountPriming/runOnce failed in TUI")
 }
 
 async fn fetch_plugins_list(

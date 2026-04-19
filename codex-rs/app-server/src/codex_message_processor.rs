@@ -1,3 +1,5 @@
+use crate::account_priming::AccountPrimingController;
+use crate::account_priming::DEFAULT_ACCOUNT_PRIMING_INTERVAL_SECONDS;
 use crate::auth_profiles::delete_auth_profile;
 use crate::auth_profiles::list_auth_profiles;
 use crate::auth_profiles::load_auth_profile;
@@ -32,6 +34,11 @@ use codex_analytics::InputError;
 use codex_analytics::TurnSteerRequestError;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
+use codex_app_server_protocol::AccountPrimingReadResponse;
+use codex_app_server_protocol::AccountPrimingRunOnceResponse;
+use codex_app_server_protocol::AccountPrimingStartParams;
+use codex_app_server_protocol::AccountPrimingStartResponse;
+use codex_app_server_protocol::AccountPrimingStopResponse;
 use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
@@ -496,6 +503,7 @@ pub(crate) struct CodexMessageProcessor {
     pending_fuzzy_searches: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
     fuzzy_search_sessions: Arc<Mutex<HashMap<String, FuzzyFileSearchSession>>>,
     auth_profile_rate_limit_cache: Arc<Mutex<HashMap<String, CachedAuthProfileRateLimits>>>,
+    account_priming: AccountPrimingController,
     background_tasks: TaskTracker,
     feedback: CodexFeedback,
     log_db: Option<LogDbLayer>,
@@ -740,12 +748,12 @@ impl CodexMessageProcessor {
         } = args;
         Self {
             auth_manager,
-            thread_manager,
+            thread_manager: Arc::clone(&thread_manager),
             outgoing: outgoing.clone(),
             analytics_events_client,
             arg0_paths,
             thread_store: LocalThreadStore::new(codex_rollout::RolloutConfig::from_view(&config)),
-            config,
+            config: Arc::clone(&config),
             cli_overrides,
             runtime_feature_enablement,
             cloud_requirements,
@@ -757,6 +765,10 @@ impl CodexMessageProcessor {
             pending_fuzzy_searches: Arc::new(Mutex::new(HashMap::new())),
             fuzzy_search_sessions: Arc::new(Mutex::new(HashMap::new())),
             auth_profile_rate_limit_cache: Arc::new(Mutex::new(HashMap::new())),
+            account_priming: AccountPrimingController::new(
+                Arc::clone(&config),
+                Arc::clone(&thread_manager),
+            ),
             background_tasks: TaskTracker::new(),
             feedback,
             log_db,
@@ -1163,6 +1175,31 @@ impl CodexMessageProcessor {
             }
             ClientRequest::AuthProfileDelete { request_id, params } => {
                 self.delete_auth_profile_v2(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::AccountPrimingRead {
+                request_id,
+                params: _,
+            } => {
+                self.account_priming_read_v2(to_connection_request_id(request_id))
+                    .await;
+            }
+            ClientRequest::AccountPrimingStart { request_id, params } => {
+                self.account_priming_start_v2(to_connection_request_id(request_id), params)
+                    .await;
+            }
+            ClientRequest::AccountPrimingStop {
+                request_id,
+                params: _,
+            } => {
+                self.account_priming_stop_v2(to_connection_request_id(request_id))
+                    .await;
+            }
+            ClientRequest::AccountPrimingRunOnce {
+                request_id,
+                params: _,
+            } => {
+                self.account_priming_run_once_v2(to_connection_request_id(request_id))
                     .await;
             }
             ClientRequest::GitDiffToRemote { request_id, params } => {
@@ -2272,6 +2309,85 @@ impl CodexMessageProcessor {
         }
     }
 
+    async fn account_priming_read_v2(&self, request_id: ConnectionRequestId) {
+        let status = self.account_priming.read_status().await;
+        self.outgoing
+            .send_response(request_id, AccountPrimingReadResponse { status })
+            .await;
+    }
+
+    async fn account_priming_start_v2(
+        &self,
+        request_id: ConnectionRequestId,
+        params: AccountPrimingStartParams,
+    ) {
+        let interval_seconds = params
+            .interval_seconds
+            .unwrap_or(DEFAULT_ACCOUNT_PRIMING_INTERVAL_SECONDS);
+        if interval_seconds == 0 {
+            self.outgoing
+                .send_error(
+                    request_id,
+                    JSONRPCErrorError {
+                        code: INVALID_PARAMS_ERROR_CODE,
+                        message: "account priming interval_seconds must be at least 1".to_string(),
+                        data: None,
+                    },
+                )
+                .await;
+            return;
+        }
+
+        match self.account_priming.start(interval_seconds).await {
+            Ok(status) => {
+                self.outgoing
+                    .send_response(request_id, AccountPrimingStartResponse { status })
+                    .await;
+            }
+            Err(err) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!("failed to start account priming: {err}"),
+                            data: None,
+                        },
+                    )
+                    .await;
+            }
+        }
+    }
+
+    async fn account_priming_stop_v2(&self, request_id: ConnectionRequestId) {
+        let status = self.account_priming.stop().await;
+        self.outgoing
+            .send_response(request_id, AccountPrimingStopResponse { status })
+            .await;
+    }
+
+    async fn account_priming_run_once_v2(&self, request_id: ConnectionRequestId) {
+        match self.account_priming.run_once().await {
+            Ok(summary) => {
+                self.outgoing
+                    .send_response(request_id, AccountPrimingRunOnceResponse { summary })
+                    .await;
+            }
+            Err(err) => {
+                self.outgoing
+                    .send_error(
+                        request_id,
+                        JSONRPCErrorError {
+                            code: INVALID_REQUEST_ERROR_CODE,
+                            message: format!("failed to run account priming pass: {err}"),
+                            data: None,
+                        },
+                    )
+                    .await;
+            }
+        }
+    }
+
     async fn get_account_rate_limits(&self, request_id: ConnectionRequestId) {
         match self.fetch_account_rate_limits().await {
             Ok((rate_limits, rate_limits_by_limit_id)) => {
@@ -2899,6 +3015,7 @@ impl CodexMessageProcessor {
     }
 
     pub(crate) async fn drain_background_tasks(&self) {
+        self.account_priming.shutdown().await;
         self.background_tasks.close();
         if tokio::time::timeout(Duration::from_secs(10), self.background_tasks.wait())
             .await

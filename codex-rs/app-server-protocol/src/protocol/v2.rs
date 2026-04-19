@@ -1902,6 +1902,91 @@ pub struct AuthProfileDeleteResponse {
     pub deleted: bool,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(rename_all = "snake_case")]
+#[ts(export_to = "v2/")]
+pub enum AccountPrimingProfileOutcome {
+    Primed,
+    AlreadyActive,
+    UnsupportedAuth,
+    Failed,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountPrimingProfileResult {
+    pub profile_name: String,
+    pub account: Option<Account>,
+    pub outcome: AccountPrimingProfileOutcome,
+    pub before_rate_limits: Option<RateLimitSnapshot>,
+    pub after_rate_limits: Option<RateLimitSnapshot>,
+    pub error: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountPrimingRunSummary {
+    pub started_at: i64,
+    pub completed_at: i64,
+    pub cancelled: bool,
+    pub primed_count: u32,
+    pub already_active_count: u32,
+    pub unsupported_count: u32,
+    pub failed_count: u32,
+    pub results: Vec<AccountPrimingProfileResult>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountPrimingStatus {
+    pub running: bool,
+    pub interval_seconds: Option<u32>,
+    pub started_at: Option<i64>,
+    pub current_run_started_at: Option<i64>,
+    pub current_profile_name: Option<String>,
+    pub last_run: Option<AccountPrimingRunSummary>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountPrimingReadResponse {
+    pub status: AccountPrimingStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountPrimingStartParams {
+    #[ts(optional = nullable)]
+    pub interval_seconds: Option<u32>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountPrimingStartResponse {
+    pub status: AccountPrimingStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountPrimingStopResponse {
+    pub status: AccountPrimingStatus,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
+#[serde(rename_all = "camelCase")]
+#[ts(export_to = "v2/")]
+pub struct AccountPrimingRunOnceResponse {
+    pub summary: AccountPrimingRunSummary,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Default, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]

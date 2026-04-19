@@ -290,6 +290,9 @@ impl ChatWidget {
                         .to_string(),
                 );
             }
+            SlashCommand::Prime => {
+                self.app_event_tx.send(AppEvent::ReadAccountPrimingStatus);
+            }
             SlashCommand::Loop => {
                 self.show_stop_loop_status();
             }
@@ -510,6 +513,85 @@ impl ChatWidget {
                     }
                 }
             }
+            SlashCommand::Prime => {
+                let prepared_args = if self.bottom_pane.composer_text().is_empty() {
+                    args
+                } else {
+                    let Some((prepared_args, _prepared_elements)) = self
+                        .bottom_pane
+                        .prepare_inline_args_submission(/*record_history*/ false)
+                    else {
+                        return;
+                    };
+                    prepared_args
+                };
+                let trimmed = prepared_args.trim();
+                if trimmed.is_empty() || trimmed == "status" {
+                    self.app_event_tx.send(AppEvent::ReadAccountPrimingStatus);
+                    self.bottom_pane.drain_pending_submission_state();
+                    return;
+                }
+                let mut words = trimmed.split_whitespace();
+                let Some(action) = words.next() else {
+                    self.app_event_tx.send(AppEvent::ReadAccountPrimingStatus);
+                    self.bottom_pane.drain_pending_submission_state();
+                    return;
+                };
+                match action {
+                    "start" | "on" => {
+                        let interval_seconds = match words.next() {
+                            Some(raw) => match parse_prime_interval_seconds(raw) {
+                                Some(interval_seconds) => Some(interval_seconds),
+                                None => {
+                                    self.add_error_message(
+                                        "Usage: /prime [status | once | stop | start [interval]]"
+                                            .to_string(),
+                                    );
+                                    return;
+                                }
+                            },
+                            None => None,
+                        };
+                        if words.next().is_some() {
+                            self.add_error_message(
+                                "Usage: /prime [status | once | stop | start [interval]]"
+                                    .to_string(),
+                            );
+                            return;
+                        }
+                        self.app_event_tx
+                            .send(AppEvent::StartAccountPriming { interval_seconds });
+                        self.bottom_pane.drain_pending_submission_state();
+                    }
+                    "stop" | "off" => {
+                        if words.next().is_some() {
+                            self.add_error_message(
+                                "Usage: /prime [status | once | stop | start [interval]]"
+                                    .to_string(),
+                            );
+                            return;
+                        }
+                        self.app_event_tx.send(AppEvent::StopAccountPriming);
+                        self.bottom_pane.drain_pending_submission_state();
+                    }
+                    "once" | "run" => {
+                        if words.next().is_some() {
+                            self.add_error_message(
+                                "Usage: /prime [status | once | stop | start [interval]]"
+                                    .to_string(),
+                            );
+                            return;
+                        }
+                        self.app_event_tx.send(AppEvent::RunAccountPrimingOnce);
+                        self.bottom_pane.drain_pending_submission_state();
+                    }
+                    _ => {
+                        self.add_error_message(
+                            "Usage: /prime [status | once | stop | start [interval]]".to_string(),
+                        );
+                    }
+                }
+            }
             SlashCommand::Loop => {
                 let prepared_args = if self.bottom_pane.composer_text().is_empty() {
                     args
@@ -639,4 +721,15 @@ impl ChatWidget {
             _ => self.dispatch_command(cmd),
         }
     }
+}
+
+fn parse_prime_interval_seconds(value: &str) -> Option<u32> {
+    let (number, multiplier) = match value.as_bytes().last().copied() {
+        Some(b's') | Some(b'S') => (&value[..value.len() - 1], 1),
+        Some(b'm') | Some(b'M') => (&value[..value.len() - 1], 60),
+        Some(b'h') | Some(b'H') => (&value[..value.len() - 1], 60 * 60),
+        _ => (value, 1),
+    };
+    let parsed = number.parse::<u32>().ok()?;
+    parsed.checked_mul(multiplier)
 }

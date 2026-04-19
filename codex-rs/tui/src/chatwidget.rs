@@ -355,6 +355,7 @@ use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
+mod account_priming;
 mod auth_profiles;
 mod interrupts;
 use self::interrupts::InterruptManager;
@@ -7263,6 +7264,68 @@ impl ChatWidget {
                 /*hint*/ None,
             ),
             Err(err) => self.add_error_message(format!("Failed to delete auth profile: {err}")),
+        }
+    }
+
+    pub(crate) fn on_account_priming_status_loaded(
+        &mut self,
+        result: Result<codex_app_server_protocol::AccountPrimingReadResponse, String>,
+    ) {
+        match result {
+            Ok(response) => self.add_info_message(
+                account_priming::format_account_priming_status_output(&response.status),
+                /*hint*/ None,
+            ),
+            Err(err) => {
+                self.add_error_message(format!("Failed to read account priming status: {err}"))
+            }
+        }
+    }
+
+    pub(crate) fn on_account_priming_started(
+        &mut self,
+        result: Result<codex_app_server_protocol::AccountPrimingStartResponse, String>,
+    ) {
+        match result {
+            Ok(response) => self.add_info_message(
+                format!(
+                    "Account priming started.\n{}",
+                    account_priming::format_account_priming_status_output(&response.status)
+                ),
+                /*hint*/ None,
+            ),
+            Err(err) => self.add_error_message(format!("Failed to start account priming: {err}")),
+        }
+    }
+
+    pub(crate) fn on_account_priming_stopped(
+        &mut self,
+        result: Result<codex_app_server_protocol::AccountPrimingStopResponse, String>,
+    ) {
+        match result {
+            Ok(response) => self.add_info_message(
+                format!(
+                    "Account priming stopped.\n{}",
+                    account_priming::format_account_priming_status_output(&response.status)
+                ),
+                /*hint*/ None,
+            ),
+            Err(err) => self.add_error_message(format!("Failed to stop account priming: {err}")),
+        }
+    }
+
+    pub(crate) fn on_account_priming_run_once_completed(
+        &mut self,
+        result: Result<codex_app_server_protocol::AccountPrimingRunOnceResponse, String>,
+    ) {
+        match result {
+            Ok(response) => self.add_info_message(
+                account_priming::format_account_priming_run_output(&response.summary),
+                /*hint*/ None,
+            ),
+            Err(err) => {
+                self.add_error_message(format!("Failed to run account priming pass: {err}"))
+            }
         }
     }
 

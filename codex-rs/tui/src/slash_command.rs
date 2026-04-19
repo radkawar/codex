@@ -40,6 +40,7 @@ pub enum SlashCommand {
     Status,
     Accounts,
     Account,
+    Prime,
     Loop,
     DebugConfig,
     Title,
@@ -92,6 +93,7 @@ impl SlashCommand {
             SlashCommand::Status => "show current session configuration and token usage",
             SlashCommand::Accounts => "list saved auth profiles",
             SlashCommand::Account => "manage saved auth profiles and switch auth",
+            SlashCommand::Prime => "manage the background account-priming worker",
             SlashCommand::Loop => {
                 "configure an automatic follow-up after successful turn completion"
             }
@@ -145,6 +147,7 @@ impl SlashCommand {
                 | SlashCommand::Resume
                 | SlashCommand::SandboxReadRoot
                 | SlashCommand::Account
+                | SlashCommand::Prime
                 | SlashCommand::Loop
         )
     }
@@ -167,6 +170,7 @@ impl SlashCommand {
             | SlashCommand::SandboxReadRoot
             | SlashCommand::Experimental
             | SlashCommand::Memories
+            | SlashCommand::Prime
             | SlashCommand::Review
             | SlashCommand::Plan
             | SlashCommand::Clear

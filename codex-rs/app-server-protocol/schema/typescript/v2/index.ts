@@ -2,6 +2,15 @@
 
 export type { Account } from "./Account";
 export type { AccountLoginCompletedNotification } from "./AccountLoginCompletedNotification";
+export type { AccountPrimingProfileOutcome } from "./AccountPrimingProfileOutcome";
+export type { AccountPrimingProfileResult } from "./AccountPrimingProfileResult";
+export type { AccountPrimingReadResponse } from "./AccountPrimingReadResponse";
+export type { AccountPrimingRunOnceResponse } from "./AccountPrimingRunOnceResponse";
+export type { AccountPrimingRunSummary } from "./AccountPrimingRunSummary";
+export type { AccountPrimingStartParams } from "./AccountPrimingStartParams";
+export type { AccountPrimingStartResponse } from "./AccountPrimingStartResponse";
+export type { AccountPrimingStatus } from "./AccountPrimingStatus";
+export type { AccountPrimingStopResponse } from "./AccountPrimingStopResponse";
 export type { AccountRateLimitsUpdatedNotification } from "./AccountRateLimitsUpdatedNotification";
 export type { AccountUpdatedNotification } from "./AccountUpdatedNotification";
 export type { AddCreditsNudgeCreditType } from "./AddCreditsNudgeCreditType";

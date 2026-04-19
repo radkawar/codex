@@ -64,6 +64,7 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::registry::Registry;
 use tracing_subscriber::util::SubscriberInitExt;
 
+mod account_priming;
 mod app_server_tracing;
 mod auth_profiles;
 mod bespoke_event_handling;

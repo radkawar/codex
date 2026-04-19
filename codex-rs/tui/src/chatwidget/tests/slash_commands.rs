@@ -217,6 +217,27 @@ async fn slash_account_delete_emits_app_event() {
 }
 
 #[tokio::test]
+async fn slash_prime_bare_reads_status() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/prime");
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ReadAccountPrimingStatus));
+}
+
+#[tokio::test]
+async fn slash_prime_start_parses_interval_suffixes() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/prime start 10m");
+
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::StartAccountPriming { interval_seconds }) if interval_seconds == Some(600)
+    );
+}
+
+#[tokio::test]
 async fn auth_profiles_output_renders_table_with_reset_columns() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
     let captured_at = chrono::Local::now();
@@ -274,6 +295,95 @@ async fn auth_profiles_output_renders_table_with_reset_columns() {
             && lines[3].contains(expected_weekly_reset.as_str()),
         "expected formatted table row, got: {rendered:?}"
     );
+}
+
+#[tokio::test]
+async fn account_priming_status_output_has_stable_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.on_account_priming_status_loaded(Ok(
+        codex_app_server_protocol::AccountPrimingReadResponse {
+            status: codex_app_server_protocol::AccountPrimingStatus {
+                running: false,
+                interval_seconds: None,
+                started_at: None,
+                current_run_started_at: None,
+                current_profile_name: None,
+                last_run: None,
+            },
+        },
+    ));
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(cells.last().expect("account priming status output"));
+    assert_chatwidget_snapshot!("account_priming_status_output", rendered);
+}
+
+#[tokio::test]
+async fn account_priming_run_output_has_stable_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.on_account_priming_run_once_completed(Ok(
+        codex_app_server_protocol::AccountPrimingRunOnceResponse {
+            summary: codex_app_server_protocol::AccountPrimingRunSummary {
+                started_at: 0,
+                completed_at: 0,
+                cancelled: false,
+                primed_count: 0,
+                already_active_count: 1,
+                unsupported_count: 1,
+                failed_count: 1,
+                results: vec![
+                    codex_app_server_protocol::AccountPrimingProfileResult {
+                        profile_name: "active".to_string(),
+                        account: Some(codex_app_server_protocol::Account::Chatgpt {
+                            email: "active@example.com".to_string(),
+                            plan_type: codex_protocol::account::PlanType::Pro,
+                        }),
+                        outcome: codex_app_server_protocol::AccountPrimingProfileOutcome::AlreadyActive,
+                        before_rate_limits: Some(codex_app_server_protocol::RateLimitSnapshot {
+                            limit_id: Some("codex".to_string()),
+                            limit_name: None,
+                            primary: Some(codex_app_server_protocol::RateLimitWindow {
+                                used_percent: 12,
+                                window_duration_mins: Some(300),
+                                resets_at: None,
+                            }),
+                            secondary: Some(codex_app_server_protocol::RateLimitWindow {
+                                used_percent: 5,
+                                window_duration_mins: Some(7 * 24 * 60),
+                                resets_at: None,
+                            }),
+                            credits: None,
+                            plan_type: None,
+                        }),
+                        after_rate_limits: None,
+                        error: None,
+                    },
+                    codex_app_server_protocol::AccountPrimingProfileResult {
+                        profile_name: "unsupported".to_string(),
+                        account: Some(codex_app_server_protocol::Account::ApiKey {}),
+                        outcome: codex_app_server_protocol::AccountPrimingProfileOutcome::UnsupportedAuth,
+                        before_rate_limits: None,
+                        after_rate_limits: None,
+                        error: Some("API key auth does not expose ChatGPT usage windows".to_string()),
+                    },
+                    codex_app_server_protocol::AccountPrimingProfileResult {
+                        profile_name: "failed".to_string(),
+                        account: None,
+                        outcome: codex_app_server_protocol::AccountPrimingProfileOutcome::Failed,
+                        before_rate_limits: None,
+                        after_rate_limits: None,
+                        error: Some("failed to prime account: boom".to_string()),
+                    },
+                ],
+            },
+        },
+    ));
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(cells.last().expect("account priming run output"));
+    assert_chatwidget_snapshot!("account_priming_run_output", rendered);
 }
 
 #[tokio::test]

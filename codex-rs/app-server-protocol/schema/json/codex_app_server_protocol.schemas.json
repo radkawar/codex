@@ -1857,6 +1857,99 @@
             },
             "method": {
               "enum": [
+                "accountPriming/read"
+              ],
+              "title": "AccountPriming/readRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "AccountPriming/readRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "accountPriming/start"
+              ],
+              "title": "AccountPriming/startRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "$ref": "#/definitions/v2/AccountPrimingStartParams"
+            }
+          },
+          "required": [
+            "id",
+            "method",
+            "params"
+          ],
+          "title": "AccountPriming/startRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "accountPriming/stop"
+              ],
+              "title": "AccountPriming/stopRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "AccountPriming/stopRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
+                "accountPriming/runOnce"
+              ],
+              "title": "AccountPriming/runOnceRequestMethod",
+              "type": "string"
+            },
+            "params": {
+              "type": "null"
+            }
+          },
+          "required": [
+            "id",
+            "method"
+          ],
+          "title": "AccountPriming/runOnceRequest",
+          "type": "object"
+        },
+        {
+          "properties": {
+            "id": {
+              "$ref": "#/definitions/v2/RequestId"
+            },
+            "method": {
+              "enum": [
                 "fuzzyFileSearch"
               ],
               "title": "FuzzyFileSearchRequestMethod",
@@ -5180,6 +5273,234 @@
           "success"
         ],
         "title": "AccountLoginCompletedNotification",
+        "type": "object"
+      },
+      "AccountPrimingProfileOutcome": {
+        "enum": [
+          "primed",
+          "already_active",
+          "unsupported_auth",
+          "failed"
+        ],
+        "type": "string"
+      },
+      "AccountPrimingProfileResult": {
+        "properties": {
+          "account": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/Account"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "afterRateLimits": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/RateLimitSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "beforeRateLimits": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/RateLimitSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "outcome": {
+            "$ref": "#/definitions/v2/AccountPrimingProfileOutcome"
+          },
+          "profileName": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome",
+          "profileName"
+        ],
+        "type": "object"
+      },
+      "AccountPrimingReadResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "status": {
+            "$ref": "#/definitions/v2/AccountPrimingStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "AccountPrimingReadResponse",
+        "type": "object"
+      },
+      "AccountPrimingRunOnceResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "summary": {
+            "$ref": "#/definitions/v2/AccountPrimingRunSummary"
+          }
+        },
+        "required": [
+          "summary"
+        ],
+        "title": "AccountPrimingRunOnceResponse",
+        "type": "object"
+      },
+      "AccountPrimingRunSummary": {
+        "properties": {
+          "alreadyActiveCount": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "cancelled": {
+            "type": "boolean"
+          },
+          "completedAt": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "failedCount": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "primedCount": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/definitions/v2/AccountPrimingProfileResult"
+            },
+            "type": "array"
+          },
+          "startedAt": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "unsupportedCount": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "alreadyActiveCount",
+          "cancelled",
+          "completedAt",
+          "failedCount",
+          "primedCount",
+          "results",
+          "startedAt",
+          "unsupportedCount"
+        ],
+        "type": "object"
+      },
+      "AccountPrimingStartParams": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "intervalSeconds": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "title": "AccountPrimingStartParams",
+        "type": "object"
+      },
+      "AccountPrimingStartResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "status": {
+            "$ref": "#/definitions/v2/AccountPrimingStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "AccountPrimingStartResponse",
+        "type": "object"
+      },
+      "AccountPrimingStatus": {
+        "properties": {
+          "currentProfileName": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "currentRunStartedAt": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "intervalSeconds": {
+            "format": "uint32",
+            "minimum": 0.0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "lastRun": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/AccountPrimingRunSummary"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "running": {
+            "type": "boolean"
+          },
+          "startedAt": {
+            "format": "int64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "running"
+        ],
+        "type": "object"
+      },
+      "AccountPrimingStopResponse": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "properties": {
+          "status": {
+            "$ref": "#/definitions/v2/AccountPrimingStatus"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "AccountPrimingStopResponse",
         "type": "object"
       },
       "AccountRateLimitsUpdatedNotification": {
