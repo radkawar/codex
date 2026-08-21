@@ -241,13 +241,13 @@ impl App {
                     Some(Account::Chatgpt { email, plan_type }) => {
                         Some(StatusAccountDisplay::ChatGpt {
                             email: email.clone(),
-                            plan: Some(plan_type_display_name(plan_type.clone())),
+                            plan: Some(plan_type_display_name(*plan_type)),
                         })
                     }
                     Some(Account::AmazonBedrock { .. }) | None => {
                         status_account_display_from_auth_mode(
                             notification.auth_mode,
-                            notification.plan_type.clone(),
+                            notification.plan_type,
                         )
                     }
                 };
@@ -255,10 +255,10 @@ impl App {
                     .current_account
                     .as_ref()
                     .and_then(|account| match account {
-                        Account::Chatgpt { plan_type, .. } => Some(plan_type.clone()),
+                        Account::Chatgpt { plan_type, .. } => Some(*plan_type),
                         Account::ApiKey {} | Account::AmazonBedrock { .. } => None,
                     })
-                    .or(notification.plan_type.clone());
+                    .or(notification.plan_type);
                 let has_codex_backend_auth = matches!(
                     notification.auth_mode,
                     Some(

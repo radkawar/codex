@@ -427,7 +427,7 @@ impl AccountRequestProcessor {
         AccountUpdatedNotification {
             auth_mode,
             plan_type: current_account.as_ref().and_then(|account| match account {
-                Account::Chatgpt { plan_type, .. } => Some(plan_type.clone()),
+                Account::Chatgpt { plan_type, .. } => Some(*plan_type),
                 Account::ApiKey {} | Account::AmazonBedrock { .. } => None,
             }),
             current_account,

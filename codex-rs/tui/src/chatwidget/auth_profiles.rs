@@ -124,7 +124,7 @@ fn auth_profile_table_row(
         Some(Account::ApiKey {}) => ("API key".to_string(), "-".to_string()),
         Some(Account::Chatgpt { email, plan_type }) => (
             email.clone().unwrap_or_else(|| "unknown".to_string()),
-            plan_type_display_name(plan_type.clone()),
+            plan_type_display_name(*plan_type),
         ),
         Some(Account::AmazonBedrock { .. }) => ("Amazon Bedrock".to_string(), "-".to_string()),
         None => ("unknown".to_string(), "-".to_string()),

@@ -40,9 +40,9 @@ fn account_display_state(
         Some(Account::Chatgpt { email, plan_type }) => (
             Some(StatusAccountDisplay::ChatGpt {
                 email: email.clone(),
-                plan: Some(plan_type_display_name(plan_type.clone())),
+                plan: Some(plan_type_display_name(*plan_type)),
             }),
-            Some(plan_type.clone()),
+            Some(*plan_type),
             true,
             true,
         ),
