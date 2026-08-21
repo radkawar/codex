@@ -41,6 +41,7 @@ pub enum SlashCommand {
     Plan,
     Goal,
     Agents,
+    Workflows,
     Side,
     Btw,
     Copy,
@@ -53,7 +54,6 @@ pub enum SlashCommand {
     Account,
     Prime,
     Loop,
-    Workflows,
     Cd,
     #[strum(to_string = "pwd", serialize = "cwd")]
     Pwd,
@@ -67,6 +67,7 @@ pub enum SlashCommand {
     Mcp,
     Apps,
     Plugins,
+    Login,
     Logout,
     Quit,
     Exit,
@@ -113,13 +114,12 @@ impl SlashCommand {
             SlashCommand::Import => "import setup, this project, and recent chats from Claude Code",
             SlashCommand::Hooks => "view and manage lifecycle hooks",
             SlashCommand::Status => "show current session configuration and token usage",
-            SlashCommand::Accounts => "list saved auth profiles",
-            SlashCommand::Account => "manage saved auth profiles and switch auth",
+            SlashCommand::Accounts => "list saved accounts and auth profiles",
+            SlashCommand::Account => "list, switch, or remove saved accounts and auth profiles",
             SlashCommand::Prime => "manage the background account-priming worker",
             SlashCommand::Loop => {
                 "configure an automatic follow-up after successful turn completion"
             }
-            SlashCommand::Workflows => "view workflow subagents for this session",
             SlashCommand::Cd => "change the current working directory",
             SlashCommand::Pwd => "show the current working directory",
             SlashCommand::Usage => "view account usage or use a usage limit reset",
@@ -140,6 +140,7 @@ impl SlashCommand {
             SlashCommand::Plan => "switch to Plan mode",
             SlashCommand::Goal => "set or view the goal for a long-running task",
             SlashCommand::Agents => "view and switch between all active agent sessions",
+            SlashCommand::Workflows => "view running workflows and their subagents",
             SlashCommand::MultiAgents => "switch between this session's subagents",
             SlashCommand::Side | SlashCommand::Btw => {
                 "start a side conversation in an ephemeral fork"
@@ -157,6 +158,7 @@ impl SlashCommand {
             SlashCommand::Mcp => "list configured MCP tools; use /mcp verbose for details",
             SlashCommand::Apps => "manage apps",
             SlashCommand::Plugins => "browse plugins",
+            SlashCommand::Login => "add another ChatGPT account",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",
@@ -239,9 +241,10 @@ impl SlashCommand {
             | SlashCommand::Cd
             | SlashCommand::Clear
             | SlashCommand::Logout
+            | SlashCommand::Login
+            | SlashCommand::Account
             | SlashCommand::MemoryDrop
             | SlashCommand::MemoryUpdate
-            | SlashCommand::Account
             | SlashCommand::Prime => false,
             SlashCommand::Diff
             | SlashCommand::Resume
@@ -279,7 +282,7 @@ impl SlashCommand {
             | SlashCommand::Btw => true,
             SlashCommand::Rollout => true,
             SlashCommand::TestApproval => true,
-            SlashCommand::Agents | SlashCommand::MultiAgents => true,
+            SlashCommand::Agents | SlashCommand::MultiAgents | SlashCommand::Workflows => true,
             SlashCommand::Theme | SlashCommand::Pets => false,
         }
     }

@@ -2280,6 +2280,11 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 - `account/authProfile/activate` — switch to a named profile immediately; `account/authProfile/activateNext` rotates to the next saved profile.
 - `account/authProfile/delete` — delete a named saved profile without signing out any other profile.
 - `accountPriming/read`, `accountPriming/start`, `accountPriming/stop`, and `accountPriming/runOnce` — inspect or control the optional background worker that keeps saved ChatGPT accounts initialized and their rate-limit snapshots fresh.
+- `accountSession/login/start` — add another Codex-managed ChatGPT login. It accepts the `chatgpt` and `chatgptDeviceCode` login shapes and restores the previously active session after the new login is saved.
+- `accountSession/add` — save the current Codex-managed ChatGPT login, optionally making it active with `switchToAddedAccount`.
+- `accountSession/list` — list saved logins and their workspaces; set `refreshWorkspaceMetadata` to refresh the workspace list from ChatGPT.
+- `accountSession/switch` — activate a saved login and optionally a workspace. When `accountId` is provided, Codex exchanges the bearer token for the selected workspace before making it active; omit it to reuse the session's stored workspace token.
+- `accountSession/logout` — revoke and remove one saved login, activating the most recently used remaining login when necessary.
 - `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `bedrockApiKey`, `chatgpt`, `personalAccessToken`, or `null`) and includes the current ChatGPT `planType` when available.
 - `account/rateLimits/read` — fetch ChatGPT rate limits, an optional effective monthly credit limit, whether spend control has been reached, and the earned rate-limit resets currently available, including expiry details when provided by the backend. Rate-limit updates arrive via `account/rateLimits/updated` (notify); reset-credit data is snapshot-only.
 - `account/rateLimitResetCredit/consume` — consume one earned reset using a caller-provided idempotency key, optionally selecting a reset-credit ID returned by `account/rateLimits/read`.
@@ -2410,7 +2415,45 @@ Codex stores the key and region as the primary Codex auth, replacing any previou
 
 When using a Codex-managed Bedrock key, logout removes the key and clears `model_provider` if it is still set to `"amazon-bedrock"`. When using AWS-managed credentials, manage them through AWS or switch providers before logging out.
 
-### 7) Rate limits (ChatGPT)
+`account/logout` also revokes and removes all saved account sessions. Use `accountSession/logout` to remove only one login.
+
+### 7) Manage ChatGPT account sessions
+
+Account sessions are available only for Codex-managed ChatGPT OAuth credentials. API keys, externally supplied ChatGPT tokens, personal access tokens, workload identities, and Bedrock credentials cannot be saved as account sessions.
+
+```json
+{ "method": "accountSession/list", "id": 20, "params": { "refreshWorkspaceMetadata": true } }
+{ "id": 20, "result": {
+  "activeSessionId": "019…",
+  "sessions": [{
+    "sessionId": "019…",
+    "email": "user@example.com",
+    "userId": "user_123",
+    "displayName": null,
+    "imageUrl": null,
+    "lastUsedAt": 1770000000,
+    "isActive": true,
+    "selectedWorkspaceAccountId": "workspace_123",
+    "workspaces": [{
+      "accountId": "workspace_123",
+      "name": "Example",
+      "imageUrl": null,
+      "kind": "workspace"
+    }]
+  }]
+} }
+
+{ "method": "accountSession/switch", "id": 21, "params": {
+  "sessionId": "019…",
+  "accountId": "workspace_123"
+} }
+```
+
+Omit `accountId` to activate the saved login with its currently stored workspace token.
+
+To add a different login without changing the current account, start its browser or device-code flow through `accountSession/login/start`. The usual `account/login/completed` and `account/updated` notifications report completion. `accountSession/add` is useful when the current managed login was established outside that route.
+
+### 8) Rate limits (ChatGPT)
 
 ```json
 { "method": "account/rateLimits/read", "id": 7 }

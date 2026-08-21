@@ -36,7 +36,7 @@ const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str =
     "Press Ctrl+C to return to the main thread first.";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
-const ACCOUNT_USAGE: &str = "Usage: /account [save <name> [--overwrite] | use <name> | delete <name> | next | autoswitch [on|off|status]]";
+const ACCOUNT_USAGE: &str = "Usage: /account [list | session switch <session-id> [workspace-id] | session logout <session-id> | save <name> [--overwrite] | use <name> | delete <name> | next | autoswitch [on|off|status]]";
 const PRIME_USAGE: &str = "Usage: /prime [status | once | stop | start [interval]]";
 const USAGE_CHATGPT_LOGIN_REQUIRED: &str = "Sign in with ChatGPT to use /usage.";
 
@@ -318,6 +318,9 @@ impl ChatWidget {
             SlashCommand::Agents => {
                 self.app_event_tx.send(AppEvent::OpenAgentsOverview);
             }
+            SlashCommand::Workflows => {
+                self.app_event_tx.send(AppEvent::OpenAgentsOverview);
+            }
             SlashCommand::MultiAgents => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
             }
@@ -406,6 +409,13 @@ impl ChatWidget {
             SlashCommand::Logout => {
                 self.app_event_tx.send(AppEvent::Logout);
             }
+            SlashCommand::Login => {
+                self.app_event_tx.send(AppEvent::StartAccountLogin);
+            }
+            SlashCommand::Account => {
+                self.app_event_tx.send(AppEvent::ListAccountSessions);
+                self.app_event_tx.send(AppEvent::ListAuthProfiles);
+            }
             SlashCommand::Copy => {
                 self.copy_last_agent_markdown();
             }
@@ -471,9 +481,9 @@ impl ChatWidget {
                 }
             }
             SlashCommand::Accounts => {
+                self.app_event_tx.send(AppEvent::ListAccountSessions);
                 self.app_event_tx.send(AppEvent::ListAuthProfiles);
             }
-            SlashCommand::Account => self.add_error_message(ACCOUNT_USAGE.to_string()),
             SlashCommand::Prime => {
                 self.app_event_tx.send(AppEvent::ReadAccountPrimingStatus);
             }
@@ -773,6 +783,31 @@ impl ChatWidget {
                     return;
                 };
                 match action {
+                    "list" | "sessions" => {
+                        if words.next().is_some() {
+                            self.add_error_message(ACCOUNT_USAGE.to_string());
+                            return;
+                        }
+                        self.app_event_tx.send(AppEvent::ListAccountSessions);
+                        self.app_event_tx.send(AppEvent::ListAuthProfiles);
+                    }
+                    "session" => match (words.next(), words.next(), words.next(), words.next()) {
+                        (Some("switch"), Some(session_id), account_id, None) => {
+                            self.app_event_tx.send(AppEvent::SwitchAccountSession {
+                                session_id: session_id.to_string(),
+                                account_id: account_id.map(str::to_string),
+                            });
+                        }
+                        (Some("logout"), Some(session_id), None, None) => {
+                            self.app_event_tx.send(AppEvent::LogoutAccountSession {
+                                session_id: session_id.to_string(),
+                            });
+                        }
+                        _ => {
+                            self.add_error_message(ACCOUNT_USAGE.to_string());
+                            return;
+                        }
+                    },
                     "save" => {
                         let Some(name) = words.next() else {
                             self.add_error_message(
@@ -1359,6 +1394,7 @@ impl ChatWidget {
             | SlashCommand::Btw
             | SlashCommand::Keymap
             | SlashCommand::Agents
+            | SlashCommand::Workflows
             | SlashCommand::MultiAgents
             | SlashCommand::Workflows
             | SlashCommand::Permissions
@@ -1370,6 +1406,7 @@ impl ChatWidget {
             | SlashCommand::Quit
             | SlashCommand::Exit
             | SlashCommand::Logout
+            | SlashCommand::Login
             | SlashCommand::Mention
             | SlashCommand::Skills
             | SlashCommand::Import
