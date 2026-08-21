@@ -9,13 +9,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::Span;
 
-pub(super) struct CodeModeToolCallGuard {
+pub(crate) struct CodeModeToolCallGuard {
     analytics: AnalyticsEventsClient,
     thread_id: String,
     turn_id: String,
     turn_metadata: Arc<dyn TurnAnalyticsMetadata>,
     call_id: String,
-    pub(super) cell_id: Option<String>,
+    pub(crate) cell_id: Option<String>,
     tool_name: &'static str,
     started_at_ms: u64,
     status: CodeModeToolCallStatus,
@@ -23,7 +23,7 @@ pub(super) struct CodeModeToolCallGuard {
 }
 
 impl CodeModeToolCallGuard {
-    pub(super) fn new(
+    pub(crate) fn new(
         analytics: AnalyticsEventsClient,
         thread_id: String,
         turn_id: String,
@@ -46,7 +46,7 @@ impl CodeModeToolCallGuard {
         }
     }
 
-    pub(super) fn finish(&mut self, success: bool) {
+    pub(crate) fn finish(&mut self, success: bool) {
         let mut outcome = "failed";
         self.status = if success {
             outcome = "completed";

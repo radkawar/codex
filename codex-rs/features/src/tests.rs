@@ -163,6 +163,18 @@ fn code_mode_only_requires_code_mode() {
 }
 
 #[test]
+fn workflows_enable_required_runtime_features() {
+    let mut features = Features::with_defaults();
+    features.enable(Feature::Workflows);
+    features.normalize_dependencies();
+
+    assert_eq!(features.enabled(Feature::Workflows), true);
+    assert_eq!(features.enabled(Feature::CodeMode), true);
+    assert_eq!(features.enabled(Feature::Collab), true);
+    assert_eq!(features.enabled(Feature::MultiAgentV2), true);
+}
+
+#[test]
 fn code_mode_host_feature_config_preserves_boolean_toggle() {
     let features: FeaturesToml =
         toml::from_str("code_mode_host = false").expect("features table should deserialize");

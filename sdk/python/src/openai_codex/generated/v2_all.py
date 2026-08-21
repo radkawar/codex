@@ -57,6 +57,42 @@ class AccountPrimingStartParams(BaseModel):
     interval_seconds: Annotated[int | None, Field(alias="intervalSeconds", ge=0)] = None
 
 
+class AccountSessionWorkspaceKind(Enum):
+    personal = "personal"
+    workspace = "workspace"
+
+
+class AccountSessionsAddParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    switch_to_added_account: Annotated[bool | None, Field(alias="switchToAddedAccount")] = None
+
+
+class AccountSessionsListParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    refresh_workspace_metadata: Annotated[bool | None, Field(alias="refreshWorkspaceMetadata")] = (
+        None
+    )
+
+
+class AccountSessionsLogoutParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    session_id: Annotated[str, Field(alias="sessionId")]
+
+
+class AccountSessionsSwitchParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    account_id: Annotated[str | None, Field(alias="accountId")] = None
+    session_id: Annotated[str, Field(alias="sessionId")]
+
+
 class AccountTokenUsageDailyBucket(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -6549,6 +6585,16 @@ class AccountLoginCompletedNotification(BaseModel):
     success: bool
 
 
+class AccountSessionWorkspace(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    account_id: Annotated[str, Field(alias="accountId")]
+    image_url: Annotated[str | None, Field(alias="imageUrl")] = None
+    kind: AccountSessionWorkspaceKind | None = None
+    name: str | None = None
+
+
 class AccountUpdatedNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -7360,6 +7406,48 @@ class AccountLoginCancelRequest(BaseModel):
         Literal["account/login/cancel"], Field(title="Account/login/cancelRequestMethod")
     ]
     params: CancelLoginAccountParams
+
+
+class AccountSessionAddRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[Literal["accountSession/add"], Field(title="AccountSession/addRequestMethod")]
+    params: AccountSessionsAddParams
+
+
+class AccountSessionListRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["accountSession/list"], Field(title="AccountSession/listRequestMethod")
+    ]
+    params: AccountSessionsListParams
+
+
+class AccountSessionLogoutRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["accountSession/logout"], Field(title="AccountSession/logoutRequestMethod")
+    ]
+    params: AccountSessionsLogoutParams
+
+
+class AccountSessionSwitchRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["accountSession/switch"], Field(title="AccountSession/switchRequestMethod")
+    ]
+    params: AccountSessionsSwitchParams
 
 
 class AccountLogoutRequest(BaseModel):
@@ -10288,6 +10376,31 @@ class AccountRateLimitsUpdatedNotification(BaseModel):
     rate_limits: Annotated[RateLimitSnapshot, Field(alias="rateLimits")]
 
 
+class AccountSession(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    display_name: Annotated[str | None, Field(alias="displayName")] = None
+    email: str | None = None
+    image_url: Annotated[str | None, Field(alias="imageUrl")] = None
+    is_active: Annotated[bool, Field(alias="isActive")]
+    last_used_at: Annotated[int, Field(alias="lastUsedAt")]
+    selected_workspace_account_id: Annotated[
+        str | None, Field(alias="selectedWorkspaceAccountId")
+    ] = None
+    session_id: Annotated[str, Field(alias="sessionId")]
+    user_id: Annotated[str | None, Field(alias="userId")] = None
+    workspaces: list[AccountSessionWorkspace]
+
+
+class AccountSessionsResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    active_session_id: Annotated[str | None, Field(alias="activeSessionId")] = None
+    sessions: list[AccountSession]
+
+
 class AppInfo(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -10439,6 +10552,18 @@ class AccountLoginStartRequest(BaseModel):
     id: RequestId
     method: Annotated[
         Literal["account/login/start"], Field(title="Account/login/startRequestMethod")
+    ]
+    params: LoginAccountParams
+
+
+class AccountSessionLoginStartRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["accountSession/login/start"],
+        Field(title="AccountSession/login/startRequestMethod"),
     ]
     params: LoginAccountParams
 
@@ -12426,6 +12551,11 @@ class ClientRequest(
         | WindowsSandboxReadinessRequest
         | AccountLoginStartRequest
         | AccountLoginCancelRequest
+        | AccountSessionAddRequest
+        | AccountSessionLoginStartRequest
+        | AccountSessionListRequest
+        | AccountSessionLogoutRequest
+        | AccountSessionSwitchRequest
         | AccountLogoutRequest
         | AccountRateLimitsReadRequest
         | AccountRateLimitResetCreditConsumeRequest
@@ -12543,6 +12673,11 @@ class ClientRequest(
         | WindowsSandboxReadinessRequest
         | AccountLoginStartRequest
         | AccountLoginCancelRequest
+        | AccountSessionAddRequest
+        | AccountSessionLoginStartRequest
+        | AccountSessionListRequest
+        | AccountSessionLogoutRequest
+        | AccountSessionSwitchRequest
         | AccountLogoutRequest
         | AccountRateLimitsReadRequest
         | AccountRateLimitResetCreditConsumeRequest

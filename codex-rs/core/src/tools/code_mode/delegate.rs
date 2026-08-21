@@ -11,12 +11,15 @@ use codex_protocol::ResponseItemId;
 use codex_protocol::ThreadId;
 use codex_protocol::models::FunctionCallOutputPayload;
 use codex_protocol::models::ResponseItem;
+use codex_protocol::protocol::AgentMessageEvent;
+use codex_protocol::protocol::EventMsg;
 use serde_json::Value as JsonValue;
 use tokio::sync::oneshot;
 use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
+use super::CodeModeNotificationOutput;
 use super::ExecContext;
 use super::PUBLIC_TOOL_NAME;
 use super::submit_nested_tool;
@@ -35,6 +38,7 @@ pub(super) struct CodeModeDispatchBroker {
     dispatch_rx: async_channel::Receiver<DispatchMessage>,
     dispatch_gates: Arc<Mutex<HashMap<CellId, CellDispatchGate>>>,
     executed_tool_calls: ExecutedToolCalls,
+    notification_outputs: Arc<Mutex<HashMap<CellId, CodeModeNotificationOutput>>>,
 }
 
 struct CellDispatchGate {
@@ -52,6 +56,7 @@ impl CodeModeDispatchBroker {
             dispatch_rx,
             dispatch_gates: Arc::new(Mutex::new(HashMap::new())),
             executed_tool_calls,
+            notification_outputs: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -92,6 +97,21 @@ impl CodeModeDispatchBroker {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         dispatch_gates.remove(cell_id);
         self.executed_tool_calls.finish_cell_recording(cell_id);
+        self.notification_outputs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(cell_id);
+    }
+
+    pub(super) fn set_cell_notification_output(
+        &self,
+        cell_id: &CellId,
+        output: CodeModeNotificationOutput,
+    ) {
+        self.notification_outputs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(cell_id.clone(), output);
     }
 
     pub(super) fn active_cell_ids(&self) -> Vec<CellId> {
@@ -111,7 +131,11 @@ impl CodeModeDispatchBroker {
     ) -> CodeModeDispatchWorker {
         let track_completeness = ExecutedToolCalls::is_enabled(&exec.turn.config.features);
         let tool_runtime = ToolCallRuntime::new(Arc::clone(&exec.session), step_context, tracker);
-        let host = Arc::new(CoreTurnHost { exec, tool_runtime });
+        let host = Arc::new(CoreTurnHost {
+            exec,
+            tool_runtime,
+            notification_outputs: Arc::clone(&self.notification_outputs),
+        });
         let dispatch_rx = self.dispatch_rx.clone();
         let dispatch_gates = Arc::clone(&self.dispatch_gates);
         let (shutdown_tx, mut shutdown_rx) = oneshot::channel();
@@ -397,6 +421,7 @@ impl Drop for CodeModeDispatchWorker {
 struct CoreTurnHost {
     exec: ExecContext,
     tool_runtime: ToolCallRuntime,
+    notification_outputs: Arc<Mutex<HashMap<CellId, CodeModeNotificationOutput>>>,
 }
 
 impl CoreTurnHost {
@@ -421,19 +446,47 @@ impl CoreTurnHost {
         if text.trim().is_empty() {
             return Ok(());
         }
-        self.exec
-            .session
-            .inject_if_running(vec![ResponseItem::CustomToolCallOutput {
-                id: None,
-                call_id,
-                name: Some(PUBLIC_TOOL_NAME.to_string()),
-                output: FunctionCallOutputPayload::from_text(text),
-                internal_chat_message_metadata_passthrough: None,
-            }])
-            .await
-            .map_err(|_| {
-                format!("failed to inject exec notify message for cell {cell_id}: no active turn")
-            })
+        let notification_output = self
+            .notification_outputs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&cell_id)
+            .copied()
+            .unwrap_or(CodeModeNotificationOutput::CustomTool);
+        match notification_output {
+            CodeModeNotificationOutput::CustomTool => self
+                .exec
+                .session
+                .inject_if_running(vec![ResponseItem::CustomToolCallOutput {
+                    id: None,
+                    call_id,
+                    name: Some(PUBLIC_TOOL_NAME.to_string()),
+                    output: FunctionCallOutputPayload::from_text(text),
+                    internal_chat_message_metadata_passthrough: None,
+                }])
+                .await
+                .map_err(|_| {
+                    format!(
+                        "failed to inject exec notify message for cell {cell_id}: no active turn"
+                    )
+                }),
+            CodeModeNotificationOutput::FunctionTool => {
+                self.exec
+                    .session
+                    .send_event(
+                        &self.exec.turn,
+                        EventMsg::AgentMessage(AgentMessageEvent {
+                            message: text,
+                            phase: None,
+                            memory_citation: None,
+                            delivery: None,
+                            questions: None,
+                        }),
+                    )
+                    .await;
+                Ok(())
+            }
+        }
     }
 }
 

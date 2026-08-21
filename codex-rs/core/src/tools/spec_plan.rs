@@ -61,6 +61,9 @@ use crate::tools::registry::ToolExposure;
 use crate::tools::registry::ToolRegistry;
 use crate::tools::router::ToolRouter;
 use crate::tools::tool_namespaces_info::collect_tool_namespaces_info;
+use crate::tools::workflows::JournalHandler as WorkflowJournalHandler;
+use crate::tools::workflows::LoadHandler as WorkflowLoadHandler;
+use crate::tools::workflows::WorkflowHandler;
 use codex_extension_api::ExtensionData;
 use codex_features::Feature;
 use codex_features::SleepToolMode;
@@ -800,17 +803,19 @@ fn register_code_mode_executors(
 
     let mut code_mode_tool_names = BTreeMap::new();
     let mut code_mode_nested_tool_specs = Vec::new();
+    let mut workflow_nested_tool_specs = Vec::new();
     let mut exec_prompt_tool_specs = Vec::new();
     let mut deferred_exec_prompt_tool_specs = Vec::new();
     let mut included_deferred_mcp_output_schema = false;
     let deferred_tools_guidance_enabled = search_tool_enabled(turn_context, model_info);
     for tool in registry.entries() {
         let exposure = tool.exposure;
-        if !exposure.is_available_in_code_mode() {
+        let tool_name = tool.runtime.tool_name();
+        let workflow_runtime_tool = WorkflowHandler::supports_nested_tool(&tool_name);
+        let available_in_code_mode = exposure.is_available_in_code_mode();
+        if !available_in_code_mode && !workflow_runtime_tool {
             continue;
         }
-
-        let tool_name = tool.runtime.tool_name();
         if is_excluded_from_code_mode(turn_context, &tool_name) {
             continue;
         }
@@ -851,6 +856,13 @@ fn register_code_mode_executors(
             }
         }
 
+        if workflow_runtime_tool {
+            workflow_nested_tool_specs.push((Arc::clone(&spec), cached_runtime.clone()));
+        }
+        if !available_in_code_mode {
+            continue;
+        }
+
         if exposure == ToolExposure::Deferred {
             if deferred_tools_guidance_enabled
                 && (cached_runtime.is_none() || !included_deferred_mcp_output_schema)
@@ -860,7 +872,7 @@ fn register_code_mode_executors(
                 }
                 deferred_exec_prompt_tool_specs.push(Arc::clone(&spec));
             }
-        } else {
+        } else if exposure != ToolExposure::CodeModeOnly {
             exec_prompt_tool_specs.push(spec.as_ref().clone());
         }
         code_mode_nested_tool_specs.push((spec, cached_runtime));
@@ -874,6 +886,11 @@ fn register_code_mode_executors(
     );
     enabled_tools
         .sort_by(|left, right| compare_code_mode_tools(left, right, &namespace_descriptions));
+    let workflow_handler = turn_context
+        .config
+        .features
+        .enabled(Feature::Workflows)
+        .then(|| WorkflowHandler::new(workflow_nested_tool_specs));
     let execute_handler = CodeModeExecuteHandler::new(
         create_code_mode_tool(
             &enabled_tools,
@@ -892,6 +909,9 @@ fn register_code_mode_executors(
 
     registry.prepend_trusted(Arc::new(CodeModeWaitHandler));
     registry.prepend_trusted(Arc::new(execute_handler));
+    if let Some(workflow_handler) = workflow_handler {
+        registry.prepend_trusted(Arc::new(workflow_handler));
+    }
 
     code_mode_tool_names
 }
@@ -1033,6 +1053,15 @@ fn add_core_tool_sources(context: &CoreToolPlanContext<'_>, registry: &mut ToolR
     add_mcp_resource_tools(context, registry);
     add_core_utility_tools(context, registry);
     add_collaboration_tools(context, registry);
+    if context
+        .turn_context
+        .config
+        .features
+        .enabled(Feature::Workflows)
+    {
+        registry.add_with_exposure(WorkflowJournalHandler, ToolExposure::CodeModeOnly);
+        registry.add_with_exposure(WorkflowLoadHandler, ToolExposure::CodeModeOnly);
+    }
 }
 
 fn standalone_web_search_enabled(turn_context: &TurnContext, model_info: &ModelInfo) -> bool {
