@@ -1574,6 +1574,7 @@ mod tests {
                             AccountUpdatedNotification {
                                 auth_mode: None,
                                 plan_type: None,
+                                current_account: None,
                             },
                         ))
                         .expect("notification should serialize"),

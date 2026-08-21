@@ -1736,6 +1736,7 @@ async fn restore_thread_input_state_applies_running_state_policy() {
         queued_user_messages: VecDeque::from([UserMessage::from("already queued").into()]),
         queued_user_message_history_records: VecDeque::from([queued_history.clone()]),
         user_turn_pending_start: true,
+        stop_loop: None,
         submit_pending_steers_after_interrupt: true,
         current_collaboration_mode: chat.current_collaboration_mode.clone(),
         active_collaboration_mask: chat.active_collaboration_mask.clone(),

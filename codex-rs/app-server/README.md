@@ -2275,6 +2275,11 @@ Codex supports these authentication modes. The current mode is surfaced in `acco
 - `account/login/completed` (notify) — emitted when a login attempt finishes (success or error).
 - `account/login/cancel` — cancel a pending managed ChatGPT login by `loginId`.
 - `account/logout` — sign out; triggers `account/updated` on success.
+- `account/authProfile/list` — list saved authentication profiles and identify the active profile.
+- `account/authProfile/save` — save the current login under a profile name, optionally replacing an existing profile.
+- `account/authProfile/activate` — switch to a named profile immediately; `account/authProfile/activateNext` rotates to the next saved profile.
+- `account/authProfile/delete` — delete a named saved profile without signing out any other profile.
+- `accountPriming/read`, `accountPriming/start`, `accountPriming/stop`, and `accountPriming/runOnce` — inspect or control the optional background worker that keeps saved ChatGPT accounts initialized and their rate-limit snapshots fresh.
 - `account/updated` (notify) — emitted whenever auth mode changes (`authMode`: `apikey`, `bedrockApiKey`, `chatgpt`, `personalAccessToken`, or `null`) and includes the current ChatGPT `planType` when available.
 - `account/rateLimits/read` — fetch ChatGPT rate limits, an optional effective monthly credit limit, whether spend control has been reached, and the earned rate-limit resets currently available, including expiry details when provided by the backend. Rate-limit updates arrive via `account/rateLimits/updated` (notify); reset-credit data is snapshot-only.
 - `account/rateLimitResetCredit/consume` — consume one earned reset using a caller-provided idempotency key, optionally selecting a reset-credit ID returned by `account/rateLimits/read`.

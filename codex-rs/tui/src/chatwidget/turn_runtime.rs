@@ -206,7 +206,7 @@ impl ChatWidget {
             self.transcript.saw_plan_item_this_turn = false;
         }
         // If there is a queued user message, send exactly one now to begin the next turn.
-        let follow_up_started = self.maybe_send_next_queued_input();
+        let follow_up_started = self.maybe_send_next_queued_input() || self.maybe_run_stop_loop();
         let active_goal_continuing = self
             .current_goal_status
             .as_ref()
@@ -347,6 +347,7 @@ impl ChatWidget {
 
     pub(super) fn on_server_overloaded_error(&mut self, message: String) {
         self.input_queue.submit_pending_steers_after_interrupt = false;
+        self.disable_stop_loop_due_to_limit();
         self.finalize_turn();
 
         let message = if message.trim().is_empty() {
@@ -411,31 +412,42 @@ impl ChatWidget {
             }
         });
         self.codex_rate_limit_reached_type = rate_limit_reached_type;
-        match rate_limit_reached_type {
-            Some(RateLimitReachedType::WorkspaceOwnerCreditsDepleted) => {
-                self.on_error(
-                    "You're out of credits. Your workspace is out of credits. Add credits to continue using Codex."
-                        .to_string(),
-                );
-            }
-            Some(RateLimitReachedType::WorkspaceOwnerUsageLimitReached) => {
-                self.on_error(
-                    "Usage limit reached. You've reached your usage limit. Increase your limits to continue using codex."
-                        .to_string(),
-                );
-            }
+        let (message, nudge_credit_type) = match rate_limit_reached_type {
+            Some(RateLimitReachedType::WorkspaceOwnerCreditsDepleted) => (
+                "You're out of credits. Your workspace is out of credits. Add credits to continue using Codex."
+                    .to_string(),
+                None,
+            ),
+            Some(RateLimitReachedType::WorkspaceOwnerUsageLimitReached) => (
+                "Usage limit reached. You've reached your usage limit. Increase your limits to continue using codex."
+                    .to_string(),
+                None,
+            ),
             Some(RateLimitReachedType::WorkspaceMemberCreditsDepleted) => {
-                self.on_error(message);
-                self.open_workspace_owner_nudge_prompt(AddCreditsNudgeCreditType::Credits);
+                (message, Some(AddCreditsNudgeCreditType::Credits))
             }
             Some(RateLimitReachedType::WorkspaceMemberUsageLimitReached) => {
-                self.on_error(message);
-                self.open_workspace_owner_nudge_prompt(AddCreditsNudgeCreditType::UsageLimit);
+                (message, Some(AddCreditsNudgeCreditType::UsageLimit))
             }
-            Some(RateLimitReachedType::RateLimitReached) | None => {
-                self.on_error(message);
-            }
+            Some(RateLimitReachedType::RateLimitReached) | None => (message, None),
+        };
+
+        self.input_queue.submit_pending_steers_after_interrupt = false;
+        self.finalize_turn();
+        self.add_to_history(history_cell::new_error_event(message));
+        self.set_ambient_pet_notification(
+            crate::pets::PetNotificationKind::Failed,
+            /*body*/ None,
+        );
+        if let Some(credit_type) = nudge_credit_type {
+            self.open_workspace_owner_nudge_prompt(credit_type);
         }
+        if self.auto_switch_auth_profile_on_rate_limit {
+            self.request_next_auth_profile(AuthProfileSwitchTrigger::RateLimit);
+        } else {
+            self.disable_stop_loop_due_to_limit();
+        }
+        self.request_redraw();
     }
 
     pub(super) fn handle_non_retry_error(

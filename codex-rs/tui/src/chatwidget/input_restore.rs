@@ -474,6 +474,7 @@ impl ChatWidget {
             active_collaboration_mask: self.active_collaboration_mask.clone(),
             task_running: self.bottom_pane.is_task_running(),
             agent_turn_running: self.turn_lifecycle.agent_turn_running,
+            stop_loop: self.stop_loop.clone(),
         })
     }
 
@@ -489,6 +490,7 @@ impl ChatWidget {
             self.current_collaboration_mode = input_state.current_collaboration_mode;
             self.active_collaboration_mask = input_state.active_collaboration_mask;
             self.safety_buffering_prompt = input_state.safety_buffering_prompt;
+            self.stop_loop = input_state.stop_loop;
             self.turn_lifecycle.restore_running(
                 preserve_in_flight_turn && input_state.agent_turn_running,
                 Instant::now(),
@@ -555,6 +557,7 @@ impl ChatWidget {
             self.turn_lifecycle
                 .restore_running(/*running*/ false, Instant::now());
             self.safety_buffering_prompt = None;
+            self.stop_loop = None;
             self.input_queue.clear();
             self.restore_composer_state(Default::default());
         }
