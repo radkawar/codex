@@ -19,7 +19,7 @@ jobs:
   build-unix:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 90
+    timeout-minutes: 180
     defaults:
       run:
         working-directory: codex-rs
@@ -76,7 +76,7 @@ jobs:
   build-windows:
     name: Build x86_64-pc-windows-msvc
     runs-on: windows-2025
-    timeout-minutes: 90
+    timeout-minutes: 180
     defaults:
       run:
         working-directory: codex-rs
