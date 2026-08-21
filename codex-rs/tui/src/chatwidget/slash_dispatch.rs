@@ -318,9 +318,6 @@ impl ChatWidget {
             SlashCommand::Agents => {
                 self.app_event_tx.send(AppEvent::OpenAgentsOverview);
             }
-            SlashCommand::Workflows => {
-                self.app_event_tx.send(AppEvent::OpenAgentsOverview);
-            }
             SlashCommand::MultiAgents => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
             }
@@ -1394,7 +1391,6 @@ impl ChatWidget {
             | SlashCommand::Btw
             | SlashCommand::Keymap
             | SlashCommand::Agents
-            | SlashCommand::Workflows
             | SlashCommand::MultiAgents
             | SlashCommand::Workflows
             | SlashCommand::Permissions
