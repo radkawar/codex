@@ -5,6 +5,7 @@ use super::bedrock_auth::ensure_user_model_provider_can_be_bedrock;
 use super::*;
 use crate::account_priming::AccountPrimingController;
 use crate::account_priming::DEFAULT_ACCOUNT_PRIMING_INTERVAL_SECONDS;
+use crate::account_sessions::AccountSessionsStore;
 use crate::auth_mode::auth_mode_to_api;
 use crate::auth_profile_rotation::select_next_auth_profile;
 use crate::auth_profiles::account_from_auth;
@@ -116,6 +117,11 @@ struct CachedAuthProfileRateLimits {
 
 const AUTH_PROFILE_RATE_LIMIT_CACHE_TTL: Duration = Duration::from_secs(60);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ChatgptLoginDestination {
+    Activate,
+    AddWithoutSwitching,
+}
 impl Drop for ActiveLogin {
     fn drop(&mut self) {
         self.cancel();
@@ -159,7 +165,32 @@ impl AccountRequestProcessor {
         request_id: ConnectionRequestId,
         params: LoginAccountParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.login_v2(request_id, params).await.map(|()| None)
+        self.login_v2(request_id, params, ChatgptLoginDestination::Activate)
+            .await
+            .map(|()| None)
+    }
+
+    pub(crate) async fn login_account_session(
+        &self,
+        request_id: ConnectionRequestId,
+        params: LoginAccountParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        if !matches!(
+            params,
+            LoginAccountParams::Chatgpt { .. } | LoginAccountParams::ChatgptDeviceCode
+        ) {
+            return Err(invalid_request(
+                "account sessions support only Codex-managed ChatGPT login",
+            ));
+        }
+        self.sync_active_account_session().await?;
+        self.login_v2(
+            request_id,
+            params,
+            ChatgptLoginDestination::AddWithoutSwitching,
+        )
+        .await
+        .map(|()| None)
     }
 
     pub(crate) async fn logout_account(
@@ -176,6 +207,56 @@ impl AccountRequestProcessor {
         self.cancel_login_response(params)
             .await
             .map(|response| Some(response.into()))
+    }
+
+    pub(crate) async fn add_account_session(
+        &self,
+        params: AccountSessionsAddParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let response = self
+            .account_sessions_store()
+            .add(params.switch_to_added_account)
+            .await
+            .map_err(|err| internal_error(format!("failed to add account session: {err}")))?;
+        self.sync_auth_after_account_session_change().await;
+        Ok(Some(response.into()))
+    }
+
+    pub(crate) async fn list_account_sessions(
+        &self,
+        params: AccountSessionsListParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        self.account_sessions_store()
+            .list(params.refresh_workspace_metadata)
+            .await
+            .map(|response| Some(response.into()))
+            .map_err(|err| internal_error(format!("failed to list account sessions: {err}")))
+    }
+
+    pub(crate) async fn logout_account_session(
+        &self,
+        params: AccountSessionsLogoutParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let response = self
+            .account_sessions_store()
+            .logout(&params.session_id)
+            .await
+            .map_err(|err| internal_error(format!("failed to log out account session: {err}")))?;
+        self.sync_auth_after_account_session_change().await;
+        Ok(Some(response.into()))
+    }
+
+    pub(crate) async fn switch_account_session(
+        &self,
+        params: AccountSessionsSwitchParams,
+    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
+        let response = self
+            .account_sessions_store()
+            .switch(&params.session_id, params.account_id.as_deref())
+            .await
+            .map_err(|err| internal_error(format!("failed to switch account session: {err}")))?;
+        self.sync_auth_after_account_session_change().await;
+        Ok(Some(response.into()))
     }
 
     pub(crate) async fn get_account(
@@ -367,6 +448,40 @@ impl AccountRequestProcessor {
         )
     }
 
+    fn account_sessions_store(&self) -> AccountSessionsStore<'_> {
+        AccountSessionsStore::new(&self.config, &self.auth_manager)
+    }
+
+    async fn sync_active_account_session(&self) -> Result<(), JSONRPCErrorError> {
+        self.account_sessions_store()
+            .sync_active_auth()
+            .await
+            .map_err(|err| internal_error(format!("failed to sync active account session: {err}")))
+    }
+
+    async fn sync_auth_after_account_session_change(&self) {
+        self.auth_manager.reload().await;
+        self.config_manager.replace_cloud_config_bundle_loader(
+            self.auth_manager.clone(),
+            self.config.chatgpt_base_url.clone(),
+            self.config.http_client_factory(),
+        );
+        self.config_manager
+            .sync_default_client_residency_requirement()
+            .await;
+        Self::maybe_refresh_plugin_caches_for_current_config(
+            &self.config_manager,
+            &self.thread_manager,
+            self.auth_manager.auth_cached(),
+        )
+        .await;
+        self.outgoing
+            .send_server_notification(ServerNotification::AccountUpdated(
+                self.current_account_updated_notification(),
+            ))
+            .await;
+    }
+
     async fn load_latest_config(&self) -> Config {
         match self
             .config_manager
@@ -449,6 +564,7 @@ impl AccountRequestProcessor {
         &self,
         request_id: ConnectionRequestId,
         params: LoginAccountParams,
+        chatgpt_destination: ChatgptLoginDestination,
     ) -> Result<(), JSONRPCErrorError> {
         if self.auth_manager.is_workload_identity_selected() {
             return Err(self.configured_auth_owned_by_host_error());
@@ -477,11 +593,17 @@ impl AccountRequestProcessor {
                 } else {
                     LoginSuccessPage::default()
                 };
-                self.login_chatgpt_v2(request_id, codex_streamlined_login, login_success_page)
-                    .await;
+                self.login_chatgpt_v2(
+                    request_id,
+                    codex_streamlined_login,
+                    login_success_page,
+                    chatgpt_destination,
+                )
+                .await;
             }
             LoginAccountParams::ChatgptDeviceCode => {
-                self.login_chatgpt_device_code_v2(request_id).await;
+                self.login_chatgpt_device_code_v2(request_id, chatgpt_destination)
+                    .await;
             }
             LoginAccountParams::ChatgptAuthTokens {
                 access_token,
@@ -572,6 +694,11 @@ impl AccountRequestProcessor {
             ));
         }
 
+        self.account_sessions_store()
+            .deactivate()
+            .await
+            .map_err(|err| internal_error(format!("failed to save account sessions: {err}")))?;
+
         // Cancel any active login attempt.
         {
             let mut guard = self.active_login.lock().await;
@@ -645,6 +772,11 @@ impl AccountRequestProcessor {
 
             self.cancel_active_login().await;
             ensure_user_model_provider_can_be_bedrock(&self.config_manager).await?;
+            self.account_sessions_store()
+                .deactivate()
+                .await
+                .map_err(|err| internal_error(format!("failed to save account sessions: {err}")))?;
+
             configure_bedrock_provider(
                 &self.config_manager,
                 BedrockProviderConfig {
@@ -763,9 +895,10 @@ impl AccountRequestProcessor {
         request_id: ConnectionRequestId,
         codex_streamlined_login: bool,
         login_success_page: LoginSuccessPage,
+        destination: ChatgptLoginDestination,
     ) {
         let result = self
-            .login_chatgpt_response(codex_streamlined_login, login_success_page)
+            .login_chatgpt_response(codex_streamlined_login, login_success_page, destination)
             .await;
         self.outgoing.send_result(request_id, result).await;
     }
@@ -774,7 +907,9 @@ impl AccountRequestProcessor {
         &self,
         codex_streamlined_login: bool,
         login_success_page: LoginSuccessPage,
+        destination: ChatgptLoginDestination,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
+        self.sync_active_account_session().await?;
         let opts = self
             .login_chatgpt_common(codex_streamlined_login, login_success_page)
             .await?;
@@ -835,6 +970,7 @@ impl AccountRequestProcessor {
                     error: error_msg,
                     onboarding_entrypoint,
                 },
+                destination,
             )
             .await;
 
@@ -851,14 +987,20 @@ impl AccountRequestProcessor {
         })
     }
 
-    async fn login_chatgpt_device_code_v2(&self, request_id: ConnectionRequestId) {
-        let result = self.login_chatgpt_device_code_response().await;
+    async fn login_chatgpt_device_code_v2(
+        &self,
+        request_id: ConnectionRequestId,
+        destination: ChatgptLoginDestination,
+    ) {
+        let result = self.login_chatgpt_device_code_response(destination).await;
         self.outgoing.send_result(request_id, result).await;
     }
 
     async fn login_chatgpt_device_code_response(
         &self,
+        destination: ChatgptLoginDestination,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
+        self.sync_active_account_session().await?;
         let opts = self
             .login_chatgpt_common(
                 /*codex_streamlined_login*/ false,
@@ -914,6 +1056,7 @@ impl AccountRequestProcessor {
                     error: error_msg,
                     onboarding_entrypoint: None,
                 },
+                destination,
             )
             .await;
 
@@ -1009,6 +1152,11 @@ impl AccountRequestProcessor {
             )));
         }
 
+        self.account_sessions_store()
+            .deactivate()
+            .await
+            .map_err(|err| internal_error(format!("failed to save account sessions: {err}")))?;
+
         let auth = CodexAuth::from_external_chatgpt_tokens(
             &access_token,
             &chatgpt_account_id,
@@ -1066,8 +1214,21 @@ impl AccountRequestProcessor {
         config_manager: ConfigManager,
         thread_manager: Arc<ThreadManager>,
         config: Arc<Config>,
-        payload_v2: AccountLoginCompletedNotification,
+        mut payload_v2: AccountLoginCompletedNotification,
+        destination: ChatgptLoginDestination,
     ) {
+        if payload_v2.success {
+            let auth_manager = thread_manager.auth_manager();
+            auth_manager.reload().await;
+            let switch_to_added_account = destination == ChatgptLoginDestination::Activate;
+            if let Err(err) = AccountSessionsStore::new(&config, &auth_manager)
+                .add(switch_to_added_account)
+                .await
+            {
+                payload_v2.success = false;
+                payload_v2.error = Some(format!("failed to save account session: {err}"));
+            }
+        }
         let success = payload_v2.success;
         outgoing
             .send_server_notification(ServerNotification::AccountLoginCompleted(payload_v2))
@@ -1120,7 +1281,19 @@ impl AccountRequestProcessor {
             }
         }
 
-        match self.auth_manager.logout_with_revoke().await {
+        let cleared_account_sessions = self
+            .account_sessions_store()
+            .revoke_all_and_clear()
+            .await
+            .map_err(|err| {
+            internal_error(format!("failed to clear account sessions: {err}"))
+        })?;
+        let logout_result = if cleared_account_sessions {
+            self.auth_manager.logout().await
+        } else {
+            self.auth_manager.logout_with_revoke().await
+        };
+        match logout_result {
             Ok(_) => {}
             Err(err) => {
                 return Err(internal_error(format!("logout failed: {err}")));

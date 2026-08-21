@@ -216,7 +216,8 @@ pub struct AccountSessionsLogoutParams {
 #[ts(export_to = "v2/")]
 pub struct AccountSessionsSwitchParams {
     pub session_id: String,
-    pub account_id: String,
+    #[ts(optional = nullable)]
+    pub account_id: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]

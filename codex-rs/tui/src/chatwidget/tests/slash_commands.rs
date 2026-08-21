@@ -1970,6 +1970,69 @@ async fn slash_logout_requests_app_server_logout() {
 }
 
 #[tokio::test]
+async fn account_commands_request_login_list_switch_and_session_logout() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Login);
+    assert_matches!(rx.try_recv(), Ok(AppEvent::StartAccountLogin));
+
+    chat.dispatch_command(SlashCommand::Account);
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ListAccountSessions));
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Account,
+        "switch session-1 workspace-1".to_string(),
+        Vec::new(),
+    );
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::SwitchAccountSession { session_id, account_id })
+            if session_id == "session-1" && account_id.as_deref() == Some("workspace-1")
+    );
+
+    chat.dispatch_command_with_args(
+        SlashCommand::Account,
+        "logout session-1".to_string(),
+        Vec::new(),
+    );
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::LogoutAccountSession { session_id }) if session_id == "session-1"
+    );
+}
+
+#[tokio::test]
+async fn queued_account_switch_runs_after_the_active_turn() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    handle_turn_started(&mut chat, "turn-1");
+
+    queue_composer_text_with_tab(&mut chat, "/account switch session-1");
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+
+    complete_turn_with_message(&mut chat, "turn-1", Some("done"));
+
+    assert!(
+        std::iter::from_fn(|| rx.try_recv().ok()).any(|event| matches!(
+            event,
+            AppEvent::SwitchAccountSession {
+                session_id,
+                account_id: None,
+            } if session_id == "session-1"
+        ))
+    );
+}
+
+#[tokio::test]
+async fn workflows_command_opens_live_agent_overview() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command(SlashCommand::Workflows);
+
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenAgentsOverview));
+}
+
+#[tokio::test]
 async fn slash_copy_state_tracks_turn_complete_final_reply() {
     let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

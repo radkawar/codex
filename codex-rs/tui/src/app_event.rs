@@ -608,6 +608,23 @@ pub(crate) enum AppEvent {
     /// Request app-server account logout, then exit after it succeeds.
     Logout,
 
+    /// Start a browser-based login that adds another saved ChatGPT account.
+    StartAccountLogin,
+
+    /// List saved ChatGPT account sessions.
+    ListAccountSessions,
+
+    /// Activate a saved ChatGPT session and optionally exchange into a workspace.
+    SwitchAccountSession {
+        session_id: String,
+        account_id: Option<String>,
+    },
+
+    /// Log out one saved ChatGPT account without exiting Codex.
+    LogoutAccountSession {
+        session_id: String,
+    },
+
     /// Request to exit the application due to a fatal error.
     #[allow(dead_code)]
     FatalExitRequest(String),

@@ -182,3 +182,9 @@ Attachment creation and deletion requests using the same thread ID are serialize
 - `account/authProfile/activate` switches to a named profile; `account/authProfile/activateNext` rotates to the next saved profile.
 - `account/authProfile/delete` deletes a named profile without signing out other profiles.
 - `accountPriming/read`, `accountPriming/start`, `accountPriming/stop`, and `accountPriming/runOnce` inspect or control the background worker that keeps saved ChatGPT accounts initialized and rate-limit snapshots fresh.
+
+- `accountSession/login/start` adds a managed ChatGPT login using `chatgpt` or `chatgptDeviceCode` and restores the previously active session after saving it.
+- `accountSession/add` saves the current managed ChatGPT login; `switchToAddedAccount` optionally activates it.
+- `accountSession/list` lists saved logins and their workspaces; `refreshWorkspaceMetadata` refreshes workspace metadata.
+- `accountSession/switch` activates a saved login; optional `accountId` exchanges its bearer token for a selected workspace.
+- `accountSession/logout` revokes and removes a saved login, activating the most recently used remaining login when necessary.

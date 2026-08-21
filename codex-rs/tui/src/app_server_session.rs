@@ -38,6 +38,10 @@ use codex_app_server_client::AppServerPath;
 use codex_app_server_client::AppServerRequestHandle;
 use codex_app_server_client::TypedRequestError;
 use codex_app_server_protocol::Account;
+use codex_app_server_protocol::AccountSessionsListParams;
+use codex_app_server_protocol::AccountSessionsLogoutParams;
+use codex_app_server_protocol::AccountSessionsResponse;
+use codex_app_server_protocol::AccountSessionsSwitchParams;
 use codex_app_server_protocol::AskForApproval;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ClientRequest;
@@ -53,6 +57,8 @@ use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
+use codex_app_server_protocol::LoginAccountParams;
+use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::MemoryResetResponse;
 use codex_app_server_protocol::Model as ApiModel;
@@ -1533,6 +1539,66 @@ impl AppServerSession {
             .await
             .wrap_err("account/logout failed in TUI")?;
         Ok(())
+    }
+
+    pub(crate) async fn start_account_session_login(&mut self) -> Result<LoginAccountResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::AccountSessionsLogin {
+                request_id,
+                params: LoginAccountParams::Chatgpt {
+                    app_brand: None,
+                    codex_streamlined_login: false,
+                    use_hosted_login_success_page: false,
+                },
+            })
+            .await
+            .wrap_err("accountSession/login/start failed in TUI")
+    }
+
+    pub(crate) async fn list_account_sessions(&mut self) -> Result<AccountSessionsResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::AccountSessionsList {
+                request_id,
+                params: AccountSessionsListParams {
+                    refresh_workspace_metadata: false,
+                },
+            })
+            .await
+            .wrap_err("accountSession/list failed in TUI")
+    }
+
+    pub(crate) async fn switch_account_session(
+        &mut self,
+        session_id: String,
+        account_id: Option<String>,
+    ) -> Result<AccountSessionsResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::AccountSessionsSwitch {
+                request_id,
+                params: AccountSessionsSwitchParams {
+                    session_id,
+                    account_id,
+                },
+            })
+            .await
+            .wrap_err("accountSession/switch failed in TUI")
+    }
+
+    pub(crate) async fn logout_account_session(
+        &mut self,
+        session_id: String,
+    ) -> Result<AccountSessionsResponse> {
+        let request_id = self.next_request_id();
+        self.client
+            .request_typed(ClientRequest::AccountSessionsLogout {
+                request_id,
+                params: AccountSessionsLogoutParams { session_id },
+            })
+            .await
+            .wrap_err("accountSession/logout failed in TUI")
     }
 
     pub(crate) async fn thread_unsubscribe(&mut self, thread_id: ThreadId) -> Result<()> {

@@ -420,6 +420,7 @@ fn parent_owned_command_is_allowed(command: SlashCommand, args: &str) -> bool {
                 | SlashCommand::Side
                 | SlashCommand::Btw
                 | SlashCommand::Agents
+                | SlashCommand::Workflows
                 | SlashCommand::MultiAgents
                 | SlashCommand::Vim
                 | SlashCommand::Keymap

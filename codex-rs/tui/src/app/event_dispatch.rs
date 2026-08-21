@@ -825,6 +825,22 @@ impl App {
                         .add_error_message(format!("Logout failed: {err}"));
                 }
             },
+            AppEvent::StartAccountLogin => {
+                self.start_account_login(app_server).await;
+            }
+            AppEvent::ListAccountSessions => {
+                self.show_account_sessions(app_server).await;
+            }
+            AppEvent::SwitchAccountSession {
+                session_id,
+                account_id,
+            } => {
+                self.switch_account_session(app_server, session_id, account_id)
+                    .await;
+            }
+            AppEvent::LogoutAccountSession { session_id } => {
+                self.logout_account_session(app_server, session_id).await;
+            }
             AppEvent::FatalExitRequest(message) => {
                 return Ok(AppRunControl::Exit(ExitReason::Fatal(message)));
             }

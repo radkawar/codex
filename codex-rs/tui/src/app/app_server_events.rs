@@ -286,6 +286,21 @@ impl App {
                 }
                 return;
             }
+            ServerNotification::AccountLoginCompleted(notification) => {
+                if notification.success {
+                    self.chat_widget.add_info_message(
+                        "ChatGPT account added. Use /account to view or switch accounts."
+                            .to_string(),
+                        /*hint*/ None,
+                    );
+                } else {
+                    self.chat_widget.add_error_message(format!(
+                        "Login failed: {}",
+                        notification.error.as_deref().unwrap_or("unknown error")
+                    ));
+                }
+                return;
+            }
             ServerNotification::ExternalAgentConfigImportCompleted(notification) => {
                 let should_report_completion =
                     app_server_client.consume_external_agent_config_import_completion();
