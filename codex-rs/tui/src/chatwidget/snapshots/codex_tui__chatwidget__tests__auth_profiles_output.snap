@@ -1,0 +1,9 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+expression: rendered
+---
+• Saved auth profiles (CUR = current auth match):
+CUR  PROFILE  ACCOUNT           PLAN  5H LEFT  5H RESET  WEEKLY LEFT  WEEKLY RESET
+---  -------  ----------------  ----  -------  --------  -----------  ------------
+yes  work     user@example.com  Pro   -        -         -            -           
+no   api      API key           -     -        -         -            -

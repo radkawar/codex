@@ -1370,6 +1370,7 @@ async fn account_commands_emit_profile_events() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     submit_composer_text(&mut chat, "/accounts");
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ListAccountSessions));
     assert_matches!(rx.try_recv(), Ok(AppEvent::ListAuthProfiles));
 
     submit_composer_text(&mut chat, "/account save work --overwrite");
@@ -1978,10 +1979,11 @@ async fn account_commands_request_login_list_switch_and_session_logout() {
 
     chat.dispatch_command(SlashCommand::Account);
     assert_matches!(rx.try_recv(), Ok(AppEvent::ListAccountSessions));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ListAuthProfiles));
 
     chat.dispatch_command_with_args(
         SlashCommand::Account,
-        "switch session-1 workspace-1".to_string(),
+        "session switch session-1 workspace-1".to_string(),
         Vec::new(),
     );
     assert_matches!(
@@ -1992,7 +1994,7 @@ async fn account_commands_request_login_list_switch_and_session_logout() {
 
     chat.dispatch_command_with_args(
         SlashCommand::Account,
-        "logout session-1".to_string(),
+        "session logout session-1".to_string(),
         Vec::new(),
     );
     assert_matches!(
@@ -2007,7 +2009,7 @@ async fn queued_account_switch_runs_after_the_active_turn() {
     chat.thread_id = Some(ThreadId::new());
     handle_turn_started(&mut chat, "turn-1");
 
-    queue_composer_text_with_tab(&mut chat, "/account switch session-1");
+    queue_composer_text_with_tab(&mut chat, "/account session switch session-1");
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 
     complete_turn_with_message(&mut chat, "turn-1", Some("done"));
@@ -2024,12 +2026,12 @@ async fn queued_account_switch_runs_after_the_active_turn() {
 }
 
 #[tokio::test]
-async fn workflows_command_opens_live_agent_overview() {
+async fn workflows_command_opens_workflow_picker() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.dispatch_command(SlashCommand::Workflows);
 
-    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenAgentsOverview));
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenAgentPicker));
 }
 
 #[tokio::test]
