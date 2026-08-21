@@ -151,7 +151,7 @@ pub(crate) fn account_from_auth(auth: &AuthDotJson) -> Option<Account> {
             };
             Some(Account::Chatgpt {
                 email: record.email.clone(),
-                plan_type: record.plan_type.clone(),
+                plan_type: record.plan_type,
             })
         }
         CoreAuthMode::BedrockApiKey => Some(Account::AmazonBedrock {
