@@ -1366,6 +1366,147 @@ async fn usage_error_slash_command_is_available_from_local_recall() {
 }
 
 #[tokio::test]
+async fn account_commands_emit_profile_events() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/accounts");
+    assert_matches!(rx.try_recv(), Ok(AppEvent::ListAuthProfiles));
+
+    submit_composer_text(&mut chat, "/account save work --overwrite");
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::SaveAuthProfile { name, overwrite })
+            if name == "work" && overwrite
+    );
+
+    submit_composer_text(&mut chat, "/account switch work");
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::ActivateAuthProfile { name }) if name == "work"
+    );
+}
+
+#[tokio::test]
+async fn prime_command_parses_interval_and_workflows_stays_session_local() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/prime start 10m");
+    assert_matches!(
+        rx.try_recv(),
+        Ok(AppEvent::StartAccountPriming { interval_seconds })
+            if interval_seconds == Some(600)
+    );
+
+    submit_composer_text(&mut chat, "/workflows");
+    assert_matches!(rx.try_recv(), Ok(AppEvent::OpenAgentPicker));
+}
+
+#[tokio::test]
+async fn auth_profiles_output_has_stable_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.add_auth_profiles_output(Ok(codex_app_server_protocol::AuthProfileListResponse {
+        profiles: vec![
+            codex_app_server_protocol::AuthProfileSummary {
+                name: "work".to_string(),
+                account: Some(codex_app_server_protocol::Account::Chatgpt {
+                    email: Some("user@example.com".to_string()),
+                    plan_type: codex_protocol::account::PlanType::Pro,
+                }),
+                rate_limits: None,
+                active: true,
+            },
+            codex_app_server_protocol::AuthProfileSummary {
+                name: "api".to_string(),
+                account: Some(codex_app_server_protocol::Account::ApiKey {}),
+                rate_limits: None,
+                active: false,
+            },
+        ],
+    }));
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(cells.last().expect("auth profiles output"));
+    assert_chatwidget_snapshot!("auth_profiles_output", rendered);
+}
+
+#[tokio::test]
+async fn account_priming_status_output_has_stable_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.on_account_priming_status_loaded(Ok(
+        codex_app_server_protocol::AccountPrimingReadResponse {
+            status: codex_app_server_protocol::AccountPrimingStatus {
+                running: false,
+                interval_seconds: None,
+                started_at: None,
+                current_run_started_at: None,
+                current_profile_name: None,
+                last_run: None,
+            },
+        },
+    ));
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(cells.last().expect("account priming status output"));
+    assert_chatwidget_snapshot!("account_priming_status_output", rendered);
+}
+
+#[tokio::test]
+async fn account_priming_run_output_has_stable_snapshot() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.on_account_priming_run_once_completed(Ok(
+        codex_app_server_protocol::AccountPrimingRunOnceResponse {
+            summary: codex_app_server_protocol::AccountPrimingRunSummary {
+                started_at: 0,
+                completed_at: 0,
+                cancelled: false,
+                primed_count: 0,
+                already_active_count: 1,
+                unsupported_count: 1,
+                failed_count: 1,
+                results: vec![
+                    codex_app_server_protocol::AccountPrimingProfileResult {
+                        profile_name: "active".to_string(),
+                        account: Some(codex_app_server_protocol::Account::Chatgpt {
+                            email: Some("active@example.com".to_string()),
+                            plan_type: codex_protocol::account::PlanType::Pro,
+                        }),
+                        outcome: codex_app_server_protocol::AccountPrimingProfileOutcome::AlreadyActive,
+                        before_rate_limits: None,
+                        after_rate_limits: None,
+                        error: None,
+                    },
+                    codex_app_server_protocol::AccountPrimingProfileResult {
+                        profile_name: "unsupported".to_string(),
+                        account: Some(codex_app_server_protocol::Account::ApiKey {}),
+                        outcome: codex_app_server_protocol::AccountPrimingProfileOutcome::UnsupportedAuth,
+                        before_rate_limits: None,
+                        after_rate_limits: None,
+                        error: Some(
+                            "API key auth does not expose ChatGPT usage windows".to_string(),
+                        ),
+                    },
+                    codex_app_server_protocol::AccountPrimingProfileResult {
+                        profile_name: "failed".to_string(),
+                        account: None,
+                        outcome: codex_app_server_protocol::AccountPrimingProfileOutcome::Failed,
+                        before_rate_limits: None,
+                        after_rate_limits: None,
+                        error: Some("failed to prime account: boom".to_string()),
+                    },
+                ],
+            },
+        },
+    ));
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = lines_to_single_string(cells.last().expect("account priming run output"));
+    assert_chatwidget_snapshot!("account_priming_run_output", rendered);
+}
+
+#[tokio::test]
 async fn signed_out_usage_command_reports_chatgpt_login_requirement() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 

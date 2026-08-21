@@ -43,6 +43,20 @@ class AmazonBedrockAccount(BaseModel):
     ] = False
 
 
+class AccountPrimingProfileOutcome(Enum):
+    primed = "primed"
+    already_active = "already_active"
+    unsupported_auth = "unsupported_auth"
+    failed = "failed"
+
+
+class AccountPrimingStartParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    interval_seconds: Annotated[int | None, Field(alias="intervalSeconds", ge=0)] = None
+
+
 class AccountTokenUsageDailyBucket(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -392,6 +406,35 @@ class AuthMode(Enum):
     personal_access_token = "personalAccessToken"
     bedrock_api_key = "bedrockApiKey"
     bedrock_access_keys = "bedrockAccessKeys"
+
+
+class AuthProfileActivateParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    name: str
+
+
+class AuthProfileDeleteParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    name: str
+
+
+class AuthProfileDeleteResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    deleted: bool
+
+
+class AuthProfileSaveParams(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    name: str
+    overwrite: bool | None = None
 
 
 class AuthRecoveryNotification(BaseModel):
@@ -6511,6 +6554,7 @@ class AccountUpdatedNotification(BaseModel):
         populate_by_name=True,
     )
     auth_mode: Annotated[AuthMode | None, Field(alias="authMode")] = None
+    current_account: Annotated[Account | None, Field(alias="currentAccount")] = None
     plan_type: Annotated[PlanType | None, Field(alias="planType")] = None
 
 
@@ -7463,6 +7507,108 @@ class AccountReadRequest(BaseModel):
     id: RequestId
     method: Annotated[Literal["account/read"], Field(title="Account/readRequestMethod")]
     params: GetAccountParams
+
+
+class AccountAuthProfileListRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["account/authProfile/list"], Field(title="Account/authProfile/listRequestMethod")
+    ]
+    params: None = None
+
+
+class AccountAuthProfileSaveRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["account/authProfile/save"], Field(title="Account/authProfile/saveRequestMethod")
+    ]
+    params: AuthProfileSaveParams
+
+
+class AccountAuthProfileActivateRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["account/authProfile/activate"],
+        Field(title="Account/authProfile/activateRequestMethod"),
+    ]
+    params: AuthProfileActivateParams
+
+
+class AccountAuthProfileActivateNextRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["account/authProfile/activateNext"],
+        Field(title="Account/authProfile/activateNextRequestMethod"),
+    ]
+    params: None = None
+
+
+class AccountAuthProfileDeleteRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["account/authProfile/delete"],
+        Field(title="Account/authProfile/deleteRequestMethod"),
+    ]
+    params: AuthProfileDeleteParams
+
+
+class AccountPrimingReadRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["accountPriming/read"], Field(title="AccountPriming/readRequestMethod")
+    ]
+    params: None = None
+
+
+class AccountPrimingStartRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["accountPriming/start"], Field(title="AccountPriming/startRequestMethod")
+    ]
+    params: AccountPrimingStartParams
+
+
+class AccountPrimingStopRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["accountPriming/stop"], Field(title="AccountPriming/stopRequestMethod")
+    ]
+    params: None = None
+
+
+class AccountPrimingRunOnceRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    id: RequestId
+    method: Annotated[
+        Literal["accountPriming/runOnce"], Field(title="AccountPriming/runOnceRequestMethod")
+    ]
+    params: None = None
 
 
 class FuzzyFileSearchRequest(BaseModel):
@@ -10090,6 +10236,51 @@ class WorkspaceMessage(BaseModel):
     message_type: Annotated[WorkspaceMessageType, Field(alias="messageType")]
 
 
+class AccountPrimingProfileResult(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    account: Account | None = None
+    after_rate_limits: Annotated[RateLimitSnapshot | None, Field(alias="afterRateLimits")] = None
+    before_rate_limits: Annotated[RateLimitSnapshot | None, Field(alias="beforeRateLimits")] = None
+    error: str | None = None
+    outcome: AccountPrimingProfileOutcome
+    profile_name: Annotated[str, Field(alias="profileName")]
+
+
+class AccountPrimingRunSummary(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    already_active_count: Annotated[int, Field(alias="alreadyActiveCount", ge=0)]
+    cancelled: bool
+    completed_at: Annotated[int, Field(alias="completedAt")]
+    failed_count: Annotated[int, Field(alias="failedCount", ge=0)]
+    primed_count: Annotated[int, Field(alias="primedCount", ge=0)]
+    results: list[AccountPrimingProfileResult]
+    started_at: Annotated[int, Field(alias="startedAt")]
+    unsupported_count: Annotated[int, Field(alias="unsupportedCount", ge=0)]
+
+
+class AccountPrimingStatus(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    current_profile_name: Annotated[str | None, Field(alias="currentProfileName")] = None
+    current_run_started_at: Annotated[int | None, Field(alias="currentRunStartedAt")] = None
+    interval_seconds: Annotated[int | None, Field(alias="intervalSeconds", ge=0)] = None
+    last_run: Annotated[AccountPrimingRunSummary | None, Field(alias="lastRun")] = None
+    running: bool
+    started_at: Annotated[int | None, Field(alias="startedAt")] = None
+
+
+class AccountPrimingStopResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    status: AccountPrimingStatus
+
+
 class AccountRateLimitsUpdatedNotification(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -10143,6 +10334,16 @@ class AppsListResponse(BaseModel):
             description="Opaque cursor to pass to the next call to continue after the last item. If None, there are no more items to return.",
         ),
     ] = None
+
+
+class AuthProfileSummary(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    account: Account | None = None
+    active: bool
+    name: str
+    rate_limits: Annotated[RateLimitSnapshot | None, Field(alias="rateLimits")] = None
 
 
 class ThreadStartRequest(BaseModel):
@@ -11225,6 +11426,27 @@ class TurnsPage(BaseModel):
     next_cursor: Annotated[str | None, Field(alias="nextCursor")] = None
 
 
+class AccountPrimingReadResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    status: AccountPrimingStatus
+
+
+class AccountPrimingRunOnceResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    summary: AccountPrimingRunSummary
+
+
+class AccountPrimingStartResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    status: AccountPrimingStatus
+
+
 class AdditionalFileSystemPermissions(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
@@ -11239,6 +11461,36 @@ class AdditionalFileSystemPermissions(BaseModel):
         list[LegacyAppPathString] | None,
         Field(description="This will be removed in favor of `entries`."),
     ] = None
+
+
+class AuthProfileActivateNextResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    current_account: Annotated[Account | None, Field(alias="currentAccount")] = None
+    profile: AuthProfileSummary
+
+
+class AuthProfileActivateResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    current_account: Annotated[Account | None, Field(alias="currentAccount")] = None
+    profile: AuthProfileSummary
+
+
+class AuthProfileListResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    profiles: list[AuthProfileSummary]
+
+
+class AuthProfileSaveResponse(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+    )
+    profile: AuthProfileSummary
 
 
 class PluginShareSaveRequest(BaseModel):
@@ -12194,6 +12446,15 @@ class ClientRequest(
         | ConfigBatchWriteRequest
         | ConfigRequirementsReadRequest
         | AccountReadRequest
+        | AccountAuthProfileListRequest
+        | AccountAuthProfileSaveRequest
+        | AccountAuthProfileActivateRequest
+        | AccountAuthProfileActivateNextRequest
+        | AccountAuthProfileDeleteRequest
+        | AccountPrimingReadRequest
+        | AccountPrimingStartRequest
+        | AccountPrimingStopRequest
+        | AccountPrimingRunOnceRequest
         | FuzzyFileSearchRequest
     ]
 ):
@@ -12302,6 +12563,15 @@ class ClientRequest(
         | ConfigBatchWriteRequest
         | ConfigRequirementsReadRequest
         | AccountReadRequest
+        | AccountAuthProfileListRequest
+        | AccountAuthProfileSaveRequest
+        | AccountAuthProfileActivateRequest
+        | AccountAuthProfileActivateNextRequest
+        | AccountAuthProfileDeleteRequest
+        | AccountPrimingReadRequest
+        | AccountPrimingStartRequest
+        | AccountPrimingStopRequest
+        | AccountPrimingRunOnceRequest
         | FuzzyFileSearchRequest,
         Field(description="Request from the client to the server.", title="ClientRequest"),
     ]

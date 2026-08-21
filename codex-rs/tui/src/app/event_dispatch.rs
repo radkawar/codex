@@ -18,11 +18,37 @@ use crate::config_update::format_config_error;
 use crate::external_agent_config_migration::flow::ExternalAgentConfigMigrationFlowOutcome;
 use crate::pager_overlay::TranscriptHistoryState;
 use crate::session_resume::cwds_differ;
+use crate::status::StatusAccountDisplay;
+use crate::status::plan_type_display_name;
+use codex_app_server_protocol::Account;
 use codex_app_server_protocol::ThreadGoalStatus;
 #[cfg(target_os = "windows")]
 use codex_config::types::WindowsSandboxModeToml;
 
 pub(super) const SHUTDOWN_FIRST_EXIT_TIMEOUT: Duration = Duration::from_secs(/*secs*/ 2);
+
+fn account_display_state(
+    account: Option<&Account>,
+) -> (
+    Option<StatusAccountDisplay>,
+    Option<codex_protocol::account::PlanType>,
+    bool,
+    bool,
+) {
+    match account {
+        Some(Account::ApiKey {}) => (Some(StatusAccountDisplay::ApiKey), None, false, false),
+        Some(Account::Chatgpt { email, plan_type }) => (
+            Some(StatusAccountDisplay::ChatGpt {
+                email: email.clone(),
+                plan: Some(plan_type_display_name(plan_type.clone())),
+            }),
+            Some(plan_type.clone()),
+            true,
+            true,
+        ),
+        Some(Account::AmazonBedrock { .. }) | None => (None, None, false, false),
+    }
+}
 
 impl App {
     pub(super) async fn handle_event(
@@ -1384,6 +1410,77 @@ impl App {
                     self.refresh_rate_limits(app_server, RateLimitRefreshOrigin::Periodic);
                 }
             }
+            AppEvent::ListAuthProfiles => self.list_auth_profiles(app_server),
+            AppEvent::SaveAuthProfile { name, overwrite } => {
+                self.save_auth_profile(app_server, name, overwrite);
+            }
+            AppEvent::ActivateAuthProfile { name } => {
+                self.activate_auth_profile(app_server, name);
+            }
+            AppEvent::ActivateNextAuthProfile { trigger } => {
+                self.activate_next_auth_profile(app_server, trigger);
+            }
+            AppEvent::DeleteAuthProfile { name } => {
+                self.delete_auth_profile(app_server, name);
+            }
+            AppEvent::ReadAccountPrimingStatus => self.read_account_priming_status(app_server),
+            AppEvent::StartAccountPriming { interval_seconds } => {
+                self.start_account_priming(app_server, interval_seconds);
+            }
+            AppEvent::StopAccountPriming => self.stop_account_priming(app_server),
+            AppEvent::RunAccountPrimingOnce => self.run_account_priming_once(app_server),
+            AppEvent::AuthProfilesLoaded { result } => {
+                self.chat_widget.add_auth_profiles_output(result);
+            }
+            AppEvent::AuthProfileSaved { result } => {
+                self.chat_widget.on_auth_profile_saved(result);
+            }
+            AppEvent::AuthProfileActivated { result } => match result {
+                Ok(response) => {
+                    let (display, plan_type, has_chatgpt_account, has_codex_backend_auth) =
+                        account_display_state(response.current_account.as_ref());
+                    self.chat_widget.update_account_state(
+                        display,
+                        plan_type,
+                        has_chatgpt_account,
+                        has_codex_backend_auth,
+                    );
+                    self.chat_widget.on_auth_profile_activated(Ok(response));
+                }
+                Err(err) => self.chat_widget.on_auth_profile_activated(Err(err)),
+            },
+            AppEvent::AuthProfileNextActivated { trigger, result } => match result {
+                Ok(response) => {
+                    let (display, plan_type, has_chatgpt_account, has_codex_backend_auth) =
+                        account_display_state(response.current_account.as_ref());
+                    self.chat_widget.update_account_state(
+                        display,
+                        plan_type,
+                        has_chatgpt_account,
+                        has_codex_backend_auth,
+                    );
+                    self.chat_widget
+                        .on_auth_profile_next_activated(trigger, Ok(response));
+                }
+                Err(err) => self
+                    .chat_widget
+                    .on_auth_profile_next_activated(trigger, Err(err)),
+            },
+            AppEvent::AuthProfileDeleted { result } => {
+                self.chat_widget.on_auth_profile_deleted(result);
+            }
+            AppEvent::AccountPrimingStatusLoaded { result } => {
+                self.chat_widget.on_account_priming_status_loaded(result);
+            }
+            AppEvent::AccountPrimingStarted { result } => {
+                self.chat_widget.on_account_priming_started(result);
+            }
+            AppEvent::AccountPrimingStopped { result } => {
+                self.chat_widget.on_account_priming_stopped(result);
+            }
+            AppEvent::AccountPrimingRunOnceCompleted { result } => self
+                .chat_widget
+                .on_account_priming_run_once_completed(result),
             AppEvent::RefreshTokenActivity { request_id } => {
                 self.refresh_token_activity(app_server, request_id);
             }

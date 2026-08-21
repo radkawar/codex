@@ -211,7 +211,8 @@ impl ChatWidget {
         }
         if !from_replay {
             // Emit a notification only when the live agent is waiting for the user.
-            let follow_up_started = self.maybe_send_next_queued_input();
+            let follow_up_started =
+                self.maybe_send_next_queued_input() || self.maybe_run_stop_loop();
             let active_goal_continuing = self
                 .current_goal_status
                 .as_ref()
@@ -362,6 +363,7 @@ impl ChatWidget {
 
     pub(super) fn on_server_overloaded_error(&mut self, message: String) {
         self.input_queue.submit_pending_steers_after_interrupt = false;
+        self.disable_stop_loop_due_to_limit();
         self.finalize_turn();
 
         let message = if message.trim().is_empty() {
@@ -459,6 +461,9 @@ impl ChatWidget {
                 (message, Some(AddCreditsNudgeCreditType::UsageLimit)),
             Some(RateLimitReachedType::RateLimitReached) | None => (message, None),
         };
+        if self.auto_switch_auth_profile_on_rate_limit {
+            self.set_queue_autosend_suppressed(/*suppressed*/ true);
+        }
         self.on_error(message);
         if !self.has_applicable_backend_banner()
             && let Some(credit_type) = nudge
@@ -470,6 +475,12 @@ impl ChatWidget {
                 origin: crate::app_event::RateLimitRefreshOrigin::Recovery,
             });
         }
+        if self.auto_switch_auth_profile_on_rate_limit {
+            self.request_next_auth_profile(AuthProfileSwitchTrigger::RateLimit);
+        } else {
+            self.disable_stop_loop_due_to_limit();
+        }
+        self.request_redraw();
     }
 
     pub(super) fn handle_non_retry_error(

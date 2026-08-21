@@ -37,6 +37,8 @@ const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str =
     "Press Ctrl+C to return to the main thread first.";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
+const ACCOUNT_USAGE: &str = "Usage: /account [save <name> [--overwrite] | use <name> | delete <name> | next | autoswitch [on|off|status]]";
+const PRIME_USAGE: &str = "Usage: /prime [status | once | stop | start [interval]]";
 const USAGE_CHATGPT_LOGIN_REQUIRED: &str = "Sign in with ChatGPT to use /usage.";
 
 impl ChatWidget {
@@ -349,6 +351,9 @@ impl ChatWidget {
             SlashCommand::MultiAgents => {
                 self.app_event_tx.send(AppEvent::OpenAgentPicker);
             }
+            SlashCommand::Workflows => {
+                self.app_event_tx.send(AppEvent::OpenAgentPicker);
+            }
             SlashCommand::Permissions => {
                 if self.remote_connection.is_some() {
                     self.app_event_tx.send(AppEvent::OpenPermissionsPopup);
@@ -494,6 +499,14 @@ impl ChatWidget {
                     );
                 }
             }
+            SlashCommand::Accounts => {
+                self.app_event_tx.send(AppEvent::ListAuthProfiles);
+            }
+            SlashCommand::Account => self.add_error_message(ACCOUNT_USAGE.to_string()),
+            SlashCommand::Prime => {
+                self.app_event_tx.send(AppEvent::ReadAccountPrimingStatus);
+            }
+            SlashCommand::Loop => self.show_stop_loop_status(),
             SlashCommand::Cd => {
                 self.dispatch_command_with_args(SlashCommand::Cd, "~".to_string(), Vec::new());
             }
@@ -798,6 +811,185 @@ impl ChatWidget {
                 }
                 _ => self.add_error_message(RAW_USAGE.to_string()),
             },
+            SlashCommand::Account => {
+                let mut words = args.split_whitespace();
+                let Some(action) = words.next() else {
+                    self.dispatch_command(cmd);
+                    return;
+                };
+                match action {
+                    "save" => {
+                        let Some(name) = words.next() else {
+                            self.add_error_message(
+                                "Usage: /account save <name> [--overwrite]".to_string(),
+                            );
+                            return;
+                        };
+                        let overwrite = matches!(words.next(), Some("--overwrite"));
+                        if words.next().is_some() {
+                            self.add_error_message(
+                                "Usage: /account save <name> [--overwrite]".to_string(),
+                            );
+                            return;
+                        }
+                        self.app_event_tx.send(AppEvent::SaveAuthProfile {
+                            name: name.to_string(),
+                            overwrite,
+                        });
+                    }
+                    "use" | "switch" => {
+                        let Some(name) = words.next() else {
+                            self.add_error_message("Usage: /account use <name>".to_string());
+                            return;
+                        };
+                        if words.next().is_some() {
+                            self.add_error_message("Usage: /account use <name>".to_string());
+                            return;
+                        }
+                        self.app_event_tx.send(AppEvent::ActivateAuthProfile {
+                            name: name.to_string(),
+                        });
+                    }
+                    "delete" | "remove" | "rm" => {
+                        let Some(name) = words.next() else {
+                            self.add_error_message("Usage: /account delete <name>".to_string());
+                            return;
+                        };
+                        if words.next().is_some() {
+                            self.add_error_message("Usage: /account delete <name>".to_string());
+                            return;
+                        }
+                        self.app_event_tx.send(AppEvent::DeleteAuthProfile {
+                            name: name.to_string(),
+                        });
+                    }
+                    "next" => {
+                        if words.next().is_some() {
+                            self.add_error_message("Usage: /account next".to_string());
+                            return;
+                        }
+                        self.app_event_tx.send(AppEvent::ActivateNextAuthProfile {
+                            trigger: AuthProfileSwitchTrigger::ManualNext,
+                        });
+                    }
+                    "autoswitch" => {
+                        let Some(mode) = words.next() else {
+                            self.show_auth_profile_auto_switch_status();
+                            if source == SlashCommandDispatchSource::Live {
+                                self.bottom_pane.drain_pending_submission_state();
+                            }
+                            return;
+                        };
+                        if words.next().is_some() {
+                            self.add_error_message(
+                                "Usage: /account autoswitch [on|off|status]".to_string(),
+                            );
+                            return;
+                        }
+                        match mode {
+                            "on" => {
+                                self.set_auto_switch_auth_profile_on_rate_limit(true);
+                                self.add_info_message(
+                                    "Automatic auth switching on rate limits enabled for this session."
+                                        .to_string(),
+                                    /*hint*/ None,
+                                );
+                            }
+                            "off" => {
+                                self.set_auto_switch_auth_profile_on_rate_limit(false);
+                                self.add_info_message(
+                                    "Automatic auth switching on rate limits disabled for this session."
+                                        .to_string(),
+                                    /*hint*/ None,
+                                );
+                            }
+                            "status" => self.show_auth_profile_auto_switch_status(),
+                            _ => {
+                                self.add_error_message(
+                                    "Usage: /account autoswitch [on|off|status]".to_string(),
+                                );
+                                return;
+                            }
+                        }
+                    }
+                    _ => self.add_error_message(ACCOUNT_USAGE.to_string()),
+                }
+            }
+            SlashCommand::Prime => {
+                if trimmed.is_empty() || trimmed == "status" {
+                    self.app_event_tx.send(AppEvent::ReadAccountPrimingStatus);
+                    if source == SlashCommandDispatchSource::Live {
+                        self.bottom_pane.drain_pending_submission_state();
+                    }
+                    return;
+                }
+                let mut words = trimmed.split_whitespace();
+                let Some(action) = words.next() else {
+                    return;
+                };
+                match action {
+                    "start" | "on" => {
+                        let interval_seconds = match words.next() {
+                            Some(raw) => match parse_prime_interval_seconds(raw) {
+                                Some(interval_seconds) => Some(interval_seconds),
+                                None => {
+                                    self.add_error_message(PRIME_USAGE.to_string());
+                                    return;
+                                }
+                            },
+                            None => None,
+                        };
+                        if words.next().is_some() {
+                            self.add_error_message(PRIME_USAGE.to_string());
+                            return;
+                        }
+                        self.app_event_tx
+                            .send(AppEvent::StartAccountPriming { interval_seconds });
+                    }
+                    "stop" | "off" => {
+                        if words.next().is_some() {
+                            self.add_error_message(PRIME_USAGE.to_string());
+                            return;
+                        }
+                        self.app_event_tx.send(AppEvent::StopAccountPriming);
+                    }
+                    "once" | "run" => {
+                        if words.next().is_some() {
+                            self.add_error_message(PRIME_USAGE.to_string());
+                            return;
+                        }
+                        self.app_event_tx.send(AppEvent::RunAccountPrimingOnce);
+                    }
+                    _ => self.add_error_message(PRIME_USAGE.to_string()),
+                }
+            }
+            SlashCommand::Loop => {
+                if trimmed.is_empty() || trimmed == "status" {
+                    self.show_stop_loop_status();
+                    if source == SlashCommandDispatchSource::Live {
+                        self.bottom_pane.drain_pending_submission_state();
+                    }
+                    return;
+                }
+                if matches!(trimmed, "off" | "clear") {
+                    self.stop_loop = None;
+                    self.add_info_message("Loop disabled.".to_string(), /*hint*/ None);
+                    if source == SlashCommandDispatchSource::Live {
+                        self.bottom_pane.drain_pending_submission_state();
+                    }
+                    return;
+                }
+                if let Some(prompt) = trimmed.strip_prefix("once ") {
+                    self.set_stop_loop(StopLoopMode::Once, prompt.to_string());
+                } else if let Some(prompt) = trimmed
+                    .strip_prefix("on ")
+                    .or_else(|| trimmed.strip_prefix("always "))
+                {
+                    self.set_stop_loop(StopLoopMode::Always, prompt.to_string());
+                } else {
+                    self.set_stop_loop(StopLoopMode::Always, trimmed.to_string());
+                }
+            }
             SlashCommand::Rename if !trimmed.is_empty() => {
                 if !self.ensure_thread_rename_allowed() {
                     return;
@@ -1190,6 +1382,10 @@ impl ChatWidget {
             | SlashCommand::Rename
             | SlashCommand::Voice
             | SlashCommand::Recap
+            | SlashCommand::Accounts
+            | SlashCommand::Account
+            | SlashCommand::Prime
+            | SlashCommand::Loop
             | SlashCommand::TestApproval => QueueDrain::Continue,
             SlashCommand::Cd => match self.thread_id {
                 Some(thread_id) if self.can_change_working_directory(thread_id) => QueueDrain::Stop,
@@ -1222,6 +1418,7 @@ impl ChatWidget {
             | SlashCommand::Keymap
             | SlashCommand::Agents
             | SlashCommand::MultiAgents
+            | SlashCommand::Workflows
             | SlashCommand::Permissions
             | SlashCommand::ElevateSandbox
             | SlashCommand::Experimental
@@ -1290,4 +1487,14 @@ impl ChatWidget {
         self.bottom_pane.drain_pending_submission_state();
         false
     }
+}
+
+fn parse_prime_interval_seconds(value: &str) -> Option<u32> {
+    let (number, multiplier) = match value.as_bytes().last().copied() {
+        Some(b's') | Some(b'S') => (&value[..value.len() - 1], 1),
+        Some(b'm') | Some(b'M') => (&value[..value.len() - 1], 60),
+        Some(b'h') | Some(b'H') => (&value[..value.len() - 1], 60 * 60),
+        _ => (value, 1),
+    };
+    number.parse::<u32>().ok()?.checked_mul(multiplier)
 }

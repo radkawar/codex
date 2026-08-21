@@ -207,11 +207,26 @@ async fn assert_account_updated(
         mcp.read_notification("account/updated"),
     )
     .await??;
+    let current_account = match auth_mode {
+        Some(AuthMode::BedrockApiKey) => Some(Account::AmazonBedrock {
+            uses_codex_managed_credentials: true,
+        }),
+        Some(AuthMode::ApiKey) => Some(Account::ApiKey {}),
+        Some(
+            AuthMode::Chatgpt
+            | AuthMode::ChatgptAuthTokens
+            | AuthMode::Headers
+            | AuthMode::AgentIdentity
+            | AuthMode::PersonalAccessToken,
+        )
+        | None => None,
+    };
     assert_eq!(
         payload,
         AccountUpdatedNotification {
             auth_mode,
             plan_type: None,
+            current_account,
         }
     );
     Ok(())

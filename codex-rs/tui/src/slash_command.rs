@@ -50,6 +50,11 @@ pub enum SlashCommand {
     Diff,
     Mention,
     Status,
+    Accounts,
+    Account,
+    Prime,
+    Loop,
+    Workflows,
     Cd,
     #[strum(to_string = "pwd", serialize = "cwd")]
     Pwd,
@@ -111,6 +116,13 @@ impl SlashCommand {
             SlashCommand::Import => "import setup, this project, and recent chats from Claude Code",
             SlashCommand::Hooks => "view and manage lifecycle hooks",
             SlashCommand::Status => "show current session configuration and token usage",
+            SlashCommand::Accounts => "list saved auth profiles",
+            SlashCommand::Account => "manage saved auth profiles and switch auth",
+            SlashCommand::Prime => "manage the background account-priming worker",
+            SlashCommand::Loop => {
+                "configure an automatic follow-up after successful turn completion"
+            }
+            SlashCommand::Workflows => "view workflow subagents for this session",
             SlashCommand::Cd => "change the current working directory",
             SlashCommand::Pwd => "show the current working directory",
             SlashCommand::Usage => "view account usage or use a usage limit reset",
@@ -182,6 +194,9 @@ impl SlashCommand {
                 | SlashCommand::Side
                 | SlashCommand::Btw
                 | SlashCommand::Resume
+                | SlashCommand::Account
+                | SlashCommand::Prime
+                | SlashCommand::Loop
         )
     }
 
@@ -199,6 +214,7 @@ impl SlashCommand {
                 | SlashCommand::Pwd
                 | SlashCommand::Usage
                 | SlashCommand::Ide
+                | SlashCommand::Workflows
         )
     }
 
@@ -226,7 +242,9 @@ impl SlashCommand {
             | SlashCommand::Clear
             | SlashCommand::Logout
             | SlashCommand::MemoryDrop
-            | SlashCommand::MemoryUpdate => false,
+            | SlashCommand::MemoryUpdate
+            | SlashCommand::Account
+            | SlashCommand::Prime => false,
             SlashCommand::Diff
             | SlashCommand::Resume
             | SlashCommand::Model
@@ -239,6 +257,9 @@ impl SlashCommand {
             | SlashCommand::Skills
             | SlashCommand::Hooks
             | SlashCommand::Status
+            | SlashCommand::Accounts
+            | SlashCommand::Loop
+            | SlashCommand::Workflows
             | SlashCommand::Pwd
             | SlashCommand::Usage
             | SlashCommand::DebugConfig

@@ -174,3 +174,11 @@ Attachments record the resources currently associated with a thread, independent
 `thread/attachment/list` accepts one `threadId` and returns at most 100 attachments per page, ordered by creation time and attachment id. Continue with `nextCursor` and the same `threadId` until the cursor is `null`. Each thread can retain up to 100 attachments. Removing an attachment frees a slot for a new attachment.
 
 Attachment creation and deletion requests using the same thread ID are serialized across connections. The requesting client receives its response before the compact update is broadcast, and duplicate creates or absent deletes do not emit updates. Deleting the owning thread removes its attachments under the same lifecycle exclusion; queued attachment mutations then report that the thread was not found.
+
+## Saved accounts and profiles (fork)
+
+- `account/authProfile/list` lists saved authentication profiles and identifies the active profile.
+- `account/authProfile/save` saves the current login under a profile name, optionally replacing an existing profile.
+- `account/authProfile/activate` switches to a named profile; `account/authProfile/activateNext` rotates to the next saved profile.
+- `account/authProfile/delete` deletes a named profile without signing out other profiles.
+- `accountPriming/read`, `accountPriming/start`, `accountPriming/stop`, and `accountPriming/runOnce` inspect or control the background worker that keeps saved ChatGPT accounts initialized and rate-limit snapshots fresh.

@@ -253,6 +253,7 @@ fn normalize_thread_name(name: &str) -> Option<String> {
 }
 
 use crate::app_event::AppEvent;
+use crate::app_event::AuthProfileSwitchTrigger;
 use crate::app_event::ExitMode;
 use crate::app_event::PermissionProfileSelection;
 use crate::app_event::RateLimitRefreshOrigin;
@@ -322,6 +323,8 @@ use crate::status_indicator_widget::STATUS_DETAILS_DEFAULT_MAX_LINES;
 use crate::status_indicator_widget::StatusDetailsCapitalization;
 use crate::text_formatting::truncate_text;
 use crate::tui::FrameRequester;
+mod account_priming;
+mod auth_profiles;
 mod command_lifecycle;
 mod connector_mentions;
 mod connectors;
@@ -368,6 +371,7 @@ mod interaction;
 mod skills;
 mod slash_dispatch;
 mod worktree_picker;
+mod stop_loop;
 use self::skills::collect_tool_mentions;
 use self::skills::find_app_mentions;
 use self::skills::find_skill_mentions_with_tool_mentions;
@@ -464,6 +468,8 @@ use self::user_messages::PendingSteerCompareKey;
 use self::user_messages::QueueDrain;
 use self::user_messages::QueuedUserMessage;
 use self::user_messages::ShellEscapePolicy;
+use self::user_messages::StopLoopConfig;
+use self::user_messages::StopLoopMode;
 use self::user_messages::ThreadComposerState;
 pub(crate) use self::user_messages::ThreadInputState;
 pub(crate) use self::user_messages::ThreadInputStateRestoreMode;
@@ -627,6 +633,7 @@ pub(crate) struct ChatWidget {
     warning_display_state: WarningDisplayState,
     rate_limit_switch_prompt: RateLimitSwitchPromptState,
     add_credits_nudge_email_in_flight: Option<rate_limits::PendingCreditsNudge>,
+    auto_switch_auth_profile_on_rate_limit: bool,
     adaptive_chunking: AdaptiveChunkingPolicy,
     // Stream lifecycle controller
     stream_controller: Option<StreamController>,
@@ -725,6 +732,8 @@ pub(crate) struct ChatWidget {
     // order.
     suppress_initial_user_message_submit: bool,
     input_queue: InputQueueState,
+    /// Optional follow-up submitted after a successful turn completes.
+    stop_loop: Option<StopLoopConfig>,
     safety_buffering_prompt: Option<UserMessage>,
     safety_buffering_source: UserMessageSource,
     /// Main chat-surface bindings resolved from `tui.keymap.chat`.

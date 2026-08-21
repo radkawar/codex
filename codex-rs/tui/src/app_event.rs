@@ -13,8 +13,17 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
 use crate::inline_visualization::InlineVisualizationContext;
+use codex_app_server_protocol::AccountPrimingReadResponse;
+use codex_app_server_protocol::AccountPrimingRunOnceResponse;
+use codex_app_server_protocol::AccountPrimingStartResponse;
+use codex_app_server_protocol::AccountPrimingStopResponse;
 use codex_app_server_protocol::AddCreditsNudgeCreditType;
 use codex_app_server_protocol::AddCreditsNudgeEmailStatus;
+use codex_app_server_protocol::AuthProfileActivateNextResponse;
+use codex_app_server_protocol::AuthProfileActivateResponse;
+use codex_app_server_protocol::AuthProfileDeleteResponse;
+use codex_app_server_protocol::AuthProfileListResponse;
+use codex_app_server_protocol::AuthProfileSaveResponse;
 use codex_app_server_protocol::ConsumeAccountRateLimitResetCreditResponse;
 use codex_app_server_protocol::DynamicToolCallResponse;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
@@ -221,6 +230,12 @@ pub(crate) enum RateLimitRefreshOrigin {
     Recovery,
     /// Background account usage read, scheduled more frequently near exhaustion.
     Periodic,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AuthProfileSwitchTrigger {
+    ManualNext,
+    RateLimit,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -671,6 +686,73 @@ pub(crate) enum AppEvent {
         origin: RateLimitRefreshOrigin,
         hard_stop_generation: u64,
         result: Result<GetAccountRateLimitsResponse, String>,
+    },
+
+    /// List named auth profiles stored under the current Codex home.
+    ListAuthProfiles,
+    /// Save the current stored auth as a named profile.
+    SaveAuthProfile {
+        name: String,
+        overwrite: bool,
+    },
+    /// Activate a named auth profile and reload auth state.
+    ActivateAuthProfile {
+        name: String,
+    },
+    /// Activate the next most suitable auth profile.
+    ActivateNextAuthProfile {
+        trigger: AuthProfileSwitchTrigger,
+    },
+    /// Delete a named auth profile.
+    DeleteAuthProfile {
+        name: String,
+    },
+    /// Read the status of the background account-priming worker.
+    ReadAccountPrimingStatus,
+    /// Start the background account-priming worker.
+    StartAccountPriming {
+        interval_seconds: Option<u32>,
+    },
+    /// Stop the background account-priming worker.
+    StopAccountPriming,
+    /// Run one immediate account-priming pass.
+    RunAccountPrimingOnce,
+    /// Result of listing auth profiles.
+    AuthProfilesLoaded {
+        result: Result<AuthProfileListResponse, String>,
+    },
+    /// Result of saving an auth profile.
+    AuthProfileSaved {
+        result: Result<AuthProfileSaveResponse, String>,
+    },
+    /// Result of activating an auth profile.
+    AuthProfileActivated {
+        result: Result<AuthProfileActivateResponse, String>,
+    },
+    /// Result of activating the next auth profile.
+    AuthProfileNextActivated {
+        trigger: AuthProfileSwitchTrigger,
+        result: Result<AuthProfileActivateNextResponse, String>,
+    },
+    /// Result of deleting an auth profile.
+    AuthProfileDeleted {
+        result: Result<AuthProfileDeleteResponse, String>,
+    },
+    /// Result of reading account-priming status.
+    AccountPrimingStatusLoaded {
+        result: Result<AccountPrimingReadResponse, String>,
+    },
+    /// Result of starting the account-priming worker.
+    AccountPrimingStarted {
+        result: Result<AccountPrimingStartResponse, String>,
+    },
+    /// Result of stopping the account-priming worker.
+    AccountPrimingStopped {
+        result: Result<AccountPrimingStopResponse, String>,
+    },
+    /// Result of a one-off account-priming pass.
+    AccountPrimingRunOnceCompleted {
+        result: Result<AccountPrimingRunOnceResponse, String>,
     },
 
     /// Open the default token-activity view selected from the `/usage` menu.

@@ -1436,6 +1436,51 @@ client_request_definitions! {
         serialization: global("account-auth"),
         response: v2::GetAccountResponse,
     },
+    AuthProfileList => "account/authProfile/list" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global("account-auth"),
+        response: v2::AuthProfileListResponse,
+    },
+    AuthProfileSave => "account/authProfile/save" {
+        params: v2::AuthProfileSaveParams,
+        serialization: global("account-auth"),
+        response: v2::AuthProfileSaveResponse,
+    },
+    AuthProfileActivate => "account/authProfile/activate" {
+        params: v2::AuthProfileActivateParams,
+        serialization: global("account-auth"),
+        response: v2::AuthProfileActivateResponse,
+    },
+    AuthProfileActivateNext => "account/authProfile/activateNext" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global("account-auth"),
+        response: v2::AuthProfileActivateNextResponse,
+    },
+    AuthProfileDelete => "account/authProfile/delete" {
+        params: v2::AuthProfileDeleteParams,
+        serialization: global("account-auth"),
+        response: v2::AuthProfileDeleteResponse,
+    },
+    AccountPrimingRead => "accountPriming/read" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global("account-auth"),
+        response: v2::AccountPrimingReadResponse,
+    },
+    AccountPrimingStart => "accountPriming/start" {
+        params: v2::AccountPrimingStartParams,
+        serialization: global("account-auth"),
+        response: v2::AccountPrimingStartResponse,
+    },
+    AccountPrimingStop => "accountPriming/stop" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global("account-auth"),
+        response: v2::AccountPrimingStopResponse,
+    },
+    AccountPrimingRunOnce => "accountPriming/runOnce" {
+        params: #[ts(type = "undefined")] #[serde(skip_serializing_if = "Option::is_none")] Option<()>,
+        serialization: global("account-auth"),
+        response: v2::AccountPrimingRunOnceResponse,
+    },
 
     /// DEPRECATED APIs below
     GetConversationSummary => "getConversationSummary" {

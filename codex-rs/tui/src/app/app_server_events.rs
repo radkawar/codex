@@ -11,7 +11,10 @@ use crate::app_event::RateLimitRefreshOrigin;
 use crate::app_info::app_info_from_api;
 use crate::app_server_session::AppServerSession;
 use crate::app_server_session::status_account_display_from_auth_mode;
+use crate::status::StatusAccountDisplay;
+use crate::status::plan_type_display_name;
 use codex_app_server_client::AppServerEvent;
+use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::ClientRequest;
 use codex_app_server_protocol::RateLimitReachedType;
@@ -233,6 +236,29 @@ impl App {
                 // the newly authenticated identity, even when both accounts share one thread.
                 self.last_thread_usage_status_cell = None;
                 self.pending_thread_usage_history_refresh = false;
+                let status_account_display = match notification.current_account.as_ref() {
+                    Some(Account::ApiKey {}) => Some(StatusAccountDisplay::ApiKey),
+                    Some(Account::Chatgpt { email, plan_type }) => {
+                        Some(StatusAccountDisplay::ChatGpt {
+                            email: email.clone(),
+                            plan: Some(plan_type_display_name(plan_type.clone())),
+                        })
+                    }
+                    Some(Account::AmazonBedrock { .. }) | None => {
+                        status_account_display_from_auth_mode(
+                            notification.auth_mode,
+                            notification.plan_type.clone(),
+                        )
+                    }
+                };
+                let plan_type = notification
+                    .current_account
+                    .as_ref()
+                    .and_then(|account| match account {
+                        Account::Chatgpt { plan_type, .. } => Some(plan_type.clone()),
+                        Account::ApiKey {} | Account::AmazonBedrock { .. } => None,
+                    })
+                    .or(notification.plan_type.clone());
                 let has_codex_backend_auth = matches!(
                     notification.auth_mode,
                     Some(
@@ -243,14 +269,12 @@ impl App {
                     )
                 );
                 self.chat_widget.update_account_state(
-                    status_account_display_from_auth_mode(
-                        notification.auth_mode,
-                        notification.plan_type,
-                    ),
-                    notification.plan_type,
-                    notification
-                        .auth_mode
-                        .is_some_and(AuthMode::has_chatgpt_account),
+                    status_account_display,
+                    plan_type,
+                    matches!(notification.current_account, Some(Account::Chatgpt { .. }))
+                        || notification
+                            .auth_mode
+                            .is_some_and(AuthMode::has_chatgpt_account),
                     has_codex_backend_auth,
                 );
                 if self.chat_widget.has_chatgpt_account() {

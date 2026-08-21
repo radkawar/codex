@@ -833,6 +833,7 @@ impl MessageProcessor {
     }
 
     pub(crate) async fn drain_background_tasks(&self) {
+        self.account_processor.shutdown_account_priming().await;
         self.models_refresh_worker.shutdown();
         if let Some(worker) = &self.turn_cost_worker {
             worker.shutdown();
@@ -1753,6 +1754,33 @@ impl MessageProcessor {
             }
             ClientRequest::GetAccountRateLimits { params, .. } => {
                 self.account_processor.get_account_rate_limits(params).await
+            }
+            ClientRequest::AuthProfileList { .. } => {
+                self.account_processor.list_auth_profiles().await
+            }
+            ClientRequest::AuthProfileSave { params, .. } => {
+                self.account_processor.save_auth_profile(params).await
+            }
+            ClientRequest::AuthProfileActivate { params, .. } => {
+                self.account_processor.activate_auth_profile(params).await
+            }
+            ClientRequest::AuthProfileActivateNext { .. } => {
+                self.account_processor.activate_next_auth_profile().await
+            }
+            ClientRequest::AuthProfileDelete { params, .. } => {
+                self.account_processor.delete_auth_profile(params).await
+            }
+            ClientRequest::AccountPrimingRead { .. } => {
+                self.account_processor.read_account_priming().await
+            }
+            ClientRequest::AccountPrimingStart { params, .. } => {
+                self.account_processor.start_account_priming(params).await
+            }
+            ClientRequest::AccountPrimingStop { .. } => {
+                self.account_processor.stop_account_priming().await
+            }
+            ClientRequest::AccountPrimingRunOnce { .. } => {
+                self.account_processor.run_account_priming_once().await
             }
             ClientRequest::ConsumeAccountRateLimitResetCredit { params, .. } => {
                 self.account_processor

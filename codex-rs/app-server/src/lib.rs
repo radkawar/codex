@@ -92,11 +92,14 @@ fn is_unsupported_untrusted_approval_policy_error(err: &std::io::Error) -> bool 
     )
 }
 
+mod account_priming;
 mod analytics_utils;
 mod app_info;
 mod app_server_tracing;
 mod attestation;
 mod auth_mode;
+mod auth_profile_rotation;
+mod auth_profiles;
 mod bespoke_event_handling;
 mod code_mode_host;
 mod codex_home_metrics;

@@ -142,11 +142,24 @@ pub(crate) struct ThreadInputState {
     pub(super) queued_user_message_history_records: VecDeque<UserMessageHistoryRecord>,
     pub(crate) recovered_queue: bool,
     pub(super) user_turn_pending_start: bool,
+    pub(super) stop_loop: Option<StopLoopConfig>,
     pub(super) submit_pending_steers_after_interrupt: bool,
     pub(super) current_collaboration_mode: CollaborationMode,
     pub(super) active_collaboration_mask: Option<CollaborationModeMask>,
     pub(super) task_running: bool,
     pub(super) agent_turn_running: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct StopLoopConfig {
+    pub(super) prompt: String,
+    pub(super) mode: StopLoopMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StopLoopMode {
+    Once,
+    Always,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
