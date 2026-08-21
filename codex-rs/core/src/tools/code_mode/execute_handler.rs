@@ -9,13 +9,14 @@ use codex_tools::ToolName;
 use codex_tools::ToolSpec;
 use std::sync::Arc;
 
+use super::CodeModeNotificationOutput;
 use super::ExecContext;
 use super::PUBLIC_TOOL_NAME;
 use super::handle_runtime_response;
 use super::is_exec_tool_name;
 use super::telemetry::CodeModeToolCallGuard;
 
-type CodeModeNestedTool = (Arc<ToolSpec>, Option<Arc<dyn CoreToolRuntime>>);
+pub(crate) type CodeModeNestedTool = (Arc<ToolSpec>, Option<Arc<dyn CoreToolRuntime>>);
 
 pub struct CodeModeExecuteHandler {
     spec: ToolSpec,
@@ -30,12 +31,13 @@ impl CodeModeExecuteHandler {
         }
     }
 
-    async fn execute(
+    pub(crate) async fn execute(
         &self,
         session: std::sync::Arc<crate::session::session::Session>,
         turn: std::sync::Arc<crate::session::turn_context::TurnContext>,
         call_id: String,
         code: String,
+        notification_output: CodeModeNotificationOutput,
         telemetry: &mut CodeModeToolCallGuard,
     ) -> Result<FunctionToolOutput, FunctionCallError> {
         let args =
@@ -76,6 +78,10 @@ impl CodeModeExecuteHandler {
             .await
             .map_err(FunctionCallError::RespondToModel)?;
         let cell_id = started_cell.cell_id.clone();
+        exec.session
+            .services
+            .code_mode_service
+            .set_cell_notification_output(&cell_id, notification_output);
         telemetry.cell_id = Some(cell_id.to_string());
         exec.session
             .services
@@ -173,7 +179,14 @@ impl CodeModeExecuteHandler {
         );
         let result = match payload {
             ToolPayload::Custom { input } if is_exec_tool_name(&tool_name) => self
-                .execute(session, turn, call_id, input, &mut telemetry)
+                .execute(
+                    session,
+                    turn,
+                    call_id,
+                    input,
+                    CodeModeNotificationOutput::CustomTool,
+                    &mut telemetry,
+                )
                 .await
                 .map(boxed_tool_output),
             _ => Err(FunctionCallError::RespondToModel(format!(

@@ -2,19 +2,19 @@ use codex_analytics::AnalyticsEventsClient;
 use codex_analytics::CodeModeToolCallFact;
 use codex_analytics::CodeModeToolCallStatus;
 
-pub(super) struct CodeModeToolCallGuard {
+pub(crate) struct CodeModeToolCallGuard {
     analytics: AnalyticsEventsClient,
     thread_id: String,
     turn_id: String,
     call_id: String,
-    pub(super) cell_id: Option<String>,
+    pub(crate) cell_id: Option<String>,
     tool_name: &'static str,
     started_at_ms: u64,
     status: CodeModeToolCallStatus,
 }
 
 impl CodeModeToolCallGuard {
-    pub(super) fn new(
+    pub(crate) fn new(
         analytics: AnalyticsEventsClient,
         thread_id: String,
         turn_id: String,
@@ -33,7 +33,7 @@ impl CodeModeToolCallGuard {
         }
     }
 
-    pub(super) fn finish(&mut self, success: bool) {
+    pub(crate) fn finish(&mut self, success: bool) {
         self.status = if success {
             CodeModeToolCallStatus::Completed
         } else {

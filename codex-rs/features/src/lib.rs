@@ -175,6 +175,8 @@ pub enum Feature {
     Collab,
     /// Enable task-path-based multi-agent routing.
     MultiAgentV2,
+    /// Enable deterministic JavaScript workflows that orchestrate subagents.
+    Workflows,
     /// Removed compatibility flag retained as a no-op.
     MultiAgentMode,
     /// Removed compatibility flag for the deleted agent-job tools.
@@ -618,6 +620,11 @@ impl Features {
     pub fn normalize_dependencies(&mut self) {
         if self.enabled(Feature::CodeModeOnly) && !self.enabled(Feature::CodeMode) {
             self.enable(Feature::CodeMode);
+        }
+        if self.enabled(Feature::Workflows) {
+            self.enable(Feature::CodeMode);
+            self.enable(Feature::Collab);
+            self.enable(Feature::MultiAgentV2);
         }
     }
 }
@@ -1127,6 +1134,16 @@ pub const FEATURES: &[FeatureSpec] = &[
         id: Feature::MultiAgentV2,
         key: "multi_agent_v2",
         stage: Stage::Stable,
+        default_enabled: false,
+    },
+    FeatureSpec {
+        id: Feature::Workflows,
+        key: "workflows",
+        stage: Stage::Experimental {
+            name: "Workflows",
+            menu_description: "Run deterministic JavaScript programs that coordinate Codex subagents.",
+            announcement: "NEW: JavaScript workflows can orchestrate Codex subagents in the background. Restart Codex after enabling them.",
+        },
         default_enabled: false,
     },
     FeatureSpec {

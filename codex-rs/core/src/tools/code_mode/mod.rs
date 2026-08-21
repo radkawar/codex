@@ -2,7 +2,7 @@ mod delegate;
 mod execute_handler;
 pub(crate) mod execute_spec;
 mod response_adapter;
-mod telemetry;
+pub(crate) mod telemetry;
 mod wait_handler;
 pub(crate) mod wait_spec;
 
@@ -48,12 +48,19 @@ use codex_utils_output_truncation::truncate_function_output_items_with_policy;
 use delegate::CodeModeDispatchBroker;
 use delegate::CodeModeDispatchWorker;
 pub(crate) use execute_handler::CodeModeExecuteHandler;
+pub(crate) use execute_handler::CodeModeNestedTool;
 use response_adapter::into_function_call_output_content_items;
 pub(crate) use wait_handler::CodeModeWaitHandler;
 
 pub(crate) const PUBLIC_TOOL_NAME: &str = codex_code_mode::PUBLIC_TOOL_NAME;
 pub(crate) const WAIT_TOOL_NAME: &str = codex_code_mode::WAIT_TOOL_NAME;
 pub(crate) const DEFAULT_WAIT_YIELD_TIME_MS: u64 = codex_code_mode::DEFAULT_WAIT_YIELD_TIME_MS;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CodeModeNotificationOutput {
+    CustomTool,
+    FunctionTool,
+}
 
 /// Returns true for the code-mode `exec` tool in the default namespace.
 pub(crate) fn is_exec_tool_name(tool_name: &ToolName) -> bool {
@@ -178,6 +185,15 @@ impl CodeModeService {
 
     pub(crate) fn mark_cell_ready_for_dispatch(&self, cell_id: &codex_code_mode::CellId) {
         self.dispatch_broker.mark_cell_ready_for_dispatch(cell_id);
+    }
+
+    pub(crate) fn set_cell_notification_output(
+        &self,
+        cell_id: &CellId,
+        output: CodeModeNotificationOutput,
+    ) {
+        self.dispatch_broker
+            .set_cell_notification_output(cell_id, output);
     }
 
     pub(crate) fn finish_cell_dispatch(&self, cell_id: &CellId) {

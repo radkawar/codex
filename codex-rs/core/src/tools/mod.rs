@@ -18,6 +18,7 @@ pub(crate) mod sandboxing;
 pub(crate) mod spec_plan;
 pub(crate) mod tool_dispatch_trace;
 mod tool_namespaces_info;
+pub(crate) mod workflows;
 
 use std::borrow::Cow;
 
