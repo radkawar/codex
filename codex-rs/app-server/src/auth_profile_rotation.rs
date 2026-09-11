@@ -81,11 +81,11 @@ fn unknown_candidate(index: usize, profile: &AuthProfileSummary) -> Option<usize
         return None;
     }
 
-    if profile
-        .rate_limits
-        .as_ref()
-        .is_some_and(|rate_limits| rate_limits.primary.is_some() && rate_limits.secondary.is_some())
-    {
+    if profile.rate_limits.as_ref().is_some_and(|rate_limits| {
+        rate_limits.primary.is_some() && rate_limits.secondary.is_some()
+            || window_left_percent(rate_limits.primary.as_ref()) == Some(0)
+            || window_left_percent(rate_limits.secondary.as_ref()) == Some(0)
+    }) {
         return None;
     }
 
@@ -118,6 +118,17 @@ mod tests {
     use super::*;
     use codex_app_server_protocol::RateLimitSnapshot;
     use codex_protocol::account::PlanType;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn partial_usage_does_not_hide_an_exhausted_window() {
+        let profiles = vec![
+            chatgpt_profile("active", true, Some(100), Some(50)),
+            chatgpt_profile("daily-exhausted", false, Some(100), None),
+            chatgpt_profile("weekly-exhausted", false, None, Some(100)),
+        ];
+        assert_eq!(select_next_auth_profile(&profiles), None);
+    }
 
     fn chatgpt_profile(
         name: &str,

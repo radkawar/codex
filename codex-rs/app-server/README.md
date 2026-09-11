@@ -177,16 +177,17 @@ Attachment creation and deletion requests using the same thread ID are serialize
 
 ## Saved accounts and profiles (fork)
 
-- `account/authProfile/list` lists saved authentication profiles and identifies the active profile.
-- `account/authProfile/save` saves the current login under a profile name, optionally replacing an existing profile.
-- `account/authProfile/activate` switches to a named profile; `account/authProfile/activateNext` rotates to the next saved profile.
-- `account/authProfile/delete` deletes a named profile without signing out other profiles.
-- `accountPriming/read`, `accountPriming/start`, `accountPriming/stop`, and `accountPriming/runOnce` inspect or control the background worker that keeps saved ChatGPT accounts initialized and rate-limit snapshots fresh.
+- `account/authProfile/list` is a compatibility view of the canonical saved accounts. Its `name` field contains the saved account ID. Profile names and aliases are no longer supported.
+- `account/authProfile/activate` accepts an account ID or email in `name`; `account/authProfile/activateNext` selects another saved account with available ChatGPT capacity using the same account list and usage data.
+- `account/authProfile/save` and `account/authProfile/delete` return an error explaining their replacement. Add accounts using `accountSession/login/start` and remove them using `accountSession/logout`.
+- `accountPriming/read`, `accountPriming/start`, `accountPriming/stop`, and `accountPriming/runOnce` inspect or control priming of the same saved accounts. Legacy `profileName` fields identify an account by email or ID. Priming saves refreshed credentials only if the account has not changed or been removed during the request.
 
 - `accountSession/login/start` adds a managed ChatGPT login using `chatgpt` or `chatgptDeviceCode`. Credentials are staged privately until the login completes, preserving the active ChatGPT or API-key credentials throughout authorization and account metadata lookup. The first login activates automatically when there is no existing authentication.
 - `accountSession/add` saves the current managed ChatGPT login; `switchToAddedAccount` optionally activates it.
-- `accountSession/list` lists saved logins and their workspaces; `refreshWorkspaceMetadata` refreshes workspace metadata.
-- `accountSession/switch` activates a saved login; optional `accountId` exchanges its bearer token for a selected workspace.
-- `accountSession/logout` revokes and removes a saved login, activating the most recently used remaining login when necessary.
+- `accountSession/list` lists saved accounts, plan information (`account`), usage windows and reset timestamps (`rateLimits`), and workspaces; `refreshWorkspaceMetadata` refreshes workspace metadata. Unavailable usage is `null` and does not prevent listing accounts.
+- `accountSession/switch` activates a saved account selected by ID or email in `sessionId`; optional `accountId` exchanges its bearer token for a selected workspace. Ambiguous emails require an account ID.
+- `accountSession/logout` revokes and removes an account selected by ID or email, activating the most recently used remaining account when necessary.
+
+On first use, credentials from the older `accounts/` profile directories are migrated into `account-sessions/`. Existing saved credentials take precedence over legacy duplicates; profile names are discarded. A persisted migration marker prevents removed accounts from reappearing. The original files remain as migration backups and are no longer read or updated after migration. The TUI exposes this single store through `/account`; `/accounts` and `/account save` have been removed.
 
 `account/login/cancel` returns `canceled` when it prevents the pending login from being saved. Once completion has claimed the login, cancellation waits for the account save to finish and returns `notFound`; clients can then refresh `accountSession/list` to inspect saved accounts. The login-completed notification reports whether saving succeeded. Failed or canceled authorization discards the staged credentials.

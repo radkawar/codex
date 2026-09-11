@@ -93,6 +93,7 @@ fn is_unsupported_untrusted_approval_policy_error(err: &std::io::Error) -> bool 
 }
 
 mod account_priming;
+mod account_session_auth;
 mod account_sessions;
 mod analytics_utils;
 mod app_info;

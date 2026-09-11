@@ -1,4 +1,5 @@
 mod account;
+mod account_priming;
 mod account_sessions;
 mod account_thread_usage;
 mod analytics;
@@ -99,6 +100,7 @@ mod residency;
 mod review;
 mod rollout_migration;
 mod safety_check_downgrade;
+mod saved_accounts;
 #[cfg(not(target_os = "windows"))]
 mod selected_capability_stack;
 mod selected_environment;

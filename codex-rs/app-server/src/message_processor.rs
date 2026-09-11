@@ -1797,7 +1797,9 @@ impl MessageProcessor {
                 self.account_processor.stop_account_priming().await
             }
             ClientRequest::AccountPrimingRunOnce { .. } => {
-                self.account_processor.run_account_priming_once().await
+                self.account_processor
+                    .run_account_priming_once(request_id.clone())
+                    .await
             }
             ClientRequest::ConsumeAccountRateLimitResetCredit { params, .. } => {
                 self.account_processor

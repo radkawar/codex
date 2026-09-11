@@ -7,13 +7,8 @@ use crate::account_priming::AccountPrimingController;
 use crate::account_priming::DEFAULT_ACCOUNT_PRIMING_INTERVAL_SECONDS;
 use crate::account_sessions::AccountSessionsStore;
 use crate::auth_mode::auth_mode_to_api;
-use crate::auth_profile_rotation::select_next_auth_profile;
 use crate::auth_profiles::account_from_auth;
 use crate::auth_profiles::auth_mode_from_auth;
-use crate::auth_profiles::delete_auth_profile;
-use crate::auth_profiles::list_auth_profiles;
-use crate::auth_profiles::load_auth_profile;
-use crate::auth_profiles::save_auth_profile;
 use crate::external_auth::ExternalAuthBridge;
 use chrono::DateTime;
 use codex_app_server_protocol::AccountPrimingReadResponse;
@@ -38,17 +33,14 @@ use codex_login::LoginOnboardingEntrypoint;
 use codex_login::complete_device_code_login_with_cancel;
 use codex_login::load_auth_dot_json;
 use codex_login::login_with_bedrock_access_keys;
-use codex_login::logout;
-use codex_login::save_auth;
-use codex_model_provider::BearerAuthProvider;
 use codex_model_provider::is_supported_amazon_bedrock_region;
-use codex_protocol::auth::AuthMode as CoreAuthMode;
-use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 
 mod bedrock_setup;
 mod managed_login;
 mod rate_limit_resets;
+mod saved_accounts;
 use managed_login::ManagedLoginAttempt;
+use saved_accounts::CachedAccountRateLimits;
 
 // Duration before a browser ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -112,14 +104,6 @@ enum BedrockLoginCredentials {
     },
 }
 
-#[derive(Clone, Debug)]
-struct CachedAuthProfileRateLimits {
-    fetched_at: Instant,
-    snapshot: CoreRateLimitSnapshot,
-}
-
-const AUTH_PROFILE_RATE_LIMIT_CACHE_TTL: Duration = Duration::from_secs(60);
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ChatgptLoginDestination {
     Activate,
@@ -139,7 +123,7 @@ pub(crate) struct AccountRequestProcessor {
     config: Arc<Config>,
     config_manager: ConfigManager,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
-    auth_profile_rate_limit_cache: Arc<Mutex<HashMap<String, CachedAuthProfileRateLimits>>>,
+    account_rate_limit_cache: Arc<Mutex<HashMap<String, CachedAccountRateLimits>>>,
     account_priming: AccountPrimingController,
 }
 
@@ -152,14 +136,14 @@ impl AccountRequestProcessor {
         config_manager: ConfigManager,
     ) -> Self {
         Self {
-            auth_manager,
+            auth_manager: Arc::clone(&auth_manager),
             thread_manager: Arc::clone(&thread_manager),
             outgoing,
             config: Arc::clone(&config),
             config_manager,
             active_login: Arc::new(Mutex::new(None)),
-            auth_profile_rate_limit_cache: Arc::new(Mutex::new(HashMap::new())),
-            account_priming: AccountPrimingController::new(config, thread_manager),
+            account_rate_limit_cache: Arc::new(Mutex::new(HashMap::new())),
+            account_priming: AccountPrimingController::new(config, thread_manager, auth_manager),
         }
     }
 
@@ -222,15 +206,14 @@ impl AccountRequestProcessor {
             .await
             .map_err(|err| internal_error(format!("failed to add account session: {err}")))?;
         self.sync_auth_after_account_session_change().await;
-        Ok(Some(response.into()))
+        Ok(Some(self.with_account_rate_limits(response).await.into()))
     }
 
     pub(crate) async fn list_account_sessions(
         &self,
         params: AccountSessionsListParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.account_sessions_store()
-            .list(params.refresh_workspace_metadata)
+        self.list_accounts_with_rate_limits(params.refresh_workspace_metadata)
             .await
             .map(|response| Some(response.into()))
             .map_err(|err| internal_error(format!("failed to list account sessions: {err}")))
@@ -246,7 +229,7 @@ impl AccountRequestProcessor {
             .await
             .map_err(|err| internal_error(format!("failed to log out account session: {err}")))?;
         self.sync_auth_after_account_session_change().await;
-        Ok(Some(response.into()))
+        Ok(Some(self.with_account_rate_limits(response).await.into()))
     }
 
     pub(crate) async fn switch_account_session(
@@ -259,7 +242,7 @@ impl AccountRequestProcessor {
             .await
             .map_err(|err| internal_error(format!("failed to switch account session: {err}")))?;
         self.sync_auth_after_account_session_change().await;
-        Ok(Some(response.into()))
+        Ok(Some(self.with_account_rate_limits(response).await.into()))
     }
 
     pub(crate) async fn get_account(
@@ -311,11 +294,6 @@ impl AccountRequestProcessor {
         params: AuthProfileActivateParams,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let response = self.activate_auth_profile_by_name(&params.name).await?;
-        self.outgoing
-            .send_server_notification(ServerNotification::AccountUpdated(
-                self.current_account_updated_notification(),
-            ))
-            .await;
         Ok(Some(response.into()))
     }
 
@@ -323,11 +301,6 @@ impl AccountRequestProcessor {
         &self,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let response = self.activate_next_auth_profile_response().await?;
-        self.outgoing
-            .send_server_notification(ServerNotification::AccountUpdated(
-                self.current_account_updated_notification(),
-            ))
-            .await;
         Ok(Some(response.into()))
     }
 
@@ -371,17 +344,39 @@ impl AccountRequestProcessor {
         &self,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
         let status = self.account_priming.stop().await;
+        self.account_rate_limit_cache.lock().await.clear();
         Ok(Some(AccountPrimingStopResponse { status }.into()))
     }
 
     pub(crate) async fn run_account_priming_once(
         &self,
+        request_id: ConnectionRequestId,
     ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
-        self.account_priming
-            .run_once()
-            .await
-            .map(|summary| Some(AccountPrimingRunOnceResponse { summary }.into()))
-            .map_err(|err| invalid_request(format!("failed to run account priming pass: {err}")))
+        let completion =
+            self.account_priming.begin_run_once().await.map_err(|err| {
+                invalid_request(format!("failed to run account priming pass: {err}"))
+            })?;
+        let outgoing = Arc::clone(&self.outgoing);
+        let cache = Arc::clone(&self.account_rate_limit_cache);
+        tokio::spawn(async move {
+            match completion.await {
+                Ok(summary) => {
+                    cache.lock().await.clear();
+                    outgoing
+                        .send_response(request_id, AccountPrimingRunOnceResponse { summary })
+                        .await;
+                }
+                Err(err) => {
+                    outgoing
+                        .send_error(
+                            request_id,
+                            internal_error(format!("account priming stopped unexpectedly: {err}")),
+                        )
+                        .await
+                }
+            }
+        });
+        Ok(None)
     }
 
     pub(crate) async fn get_account_token_usage(
@@ -1465,295 +1460,6 @@ impl AccountRequestProcessor {
             }
         })
         .map_err(|err| internal_error(format!("failed to load current auth state: {err}")))
-    }
-
-    fn clear_inactive_auth_storage(
-        &self,
-        active_store_mode: AuthCredentialsStoreMode,
-    ) -> std::result::Result<(), JSONRPCErrorError> {
-        let keyring_backend_kind = self.config.auth_keyring_backend_kind();
-        if active_store_mode != AuthCredentialsStoreMode::Ephemeral {
-            logout(
-                &self.config.codex_home,
-                AuthCredentialsStoreMode::Ephemeral,
-                keyring_backend_kind,
-            )
-            .map_err(|err| {
-                internal_error(format!("failed to clear inactive external auth: {err}"))
-            })?;
-        }
-
-        if self.config.cli_auth_credentials_store_mode != AuthCredentialsStoreMode::Ephemeral
-            && active_store_mode != self.config.cli_auth_credentials_store_mode
-        {
-            logout(
-                &self.config.codex_home,
-                self.config.cli_auth_credentials_store_mode,
-                keyring_backend_kind,
-            )
-            .map_err(|err| {
-                internal_error(format!("failed to clear inactive stored auth: {err}"))
-            })?;
-        }
-
-        Ok(())
-    }
-
-    async fn list_auth_profiles_response(
-        &self,
-    ) -> Result<AuthProfileListResponse, JSONRPCErrorError> {
-        let current_auth = self.current_auth_dot_json()?;
-        let profiles = self
-            .load_auth_profiles_with_rate_limits(current_auth.as_ref())
-            .await?;
-        Ok(AuthProfileListResponse { profiles })
-    }
-
-    async fn save_auth_profile_response(
-        &self,
-        params: AuthProfileSaveParams,
-    ) -> Result<AuthProfileSaveResponse, JSONRPCErrorError> {
-        let current_auth = self.current_auth_dot_json()?.ok_or_else(|| {
-            invalid_request(
-                "no stored auth is available to save as a profile; env-only API keys cannot be exported",
-            )
-        })?;
-
-        let profile = save_auth_profile(
-            &self.config.codex_home,
-            &params.name,
-            &current_auth,
-            params.overwrite,
-            Some(&current_auth),
-        )
-        .map_err(|err| match err.kind() {
-            std::io::ErrorKind::AlreadyExists => {
-                invalid_request(format!("failed to save auth profile: {err}"))
-            }
-            std::io::ErrorKind::InvalidInput => {
-                invalid_params(format!("failed to save auth profile: {err}"))
-            }
-            _ => internal_error(format!("failed to save auth profile: {err}")),
-        })?;
-
-        self.auth_profile_rate_limit_cache
-            .lock()
-            .await
-            .remove(&params.name);
-        Ok(AuthProfileSaveResponse { profile })
-    }
-
-    async fn activate_next_auth_profile_response(
-        &self,
-    ) -> Result<AuthProfileActivateNextResponse, JSONRPCErrorError> {
-        let current_auth = self.current_auth_dot_json()?;
-        let profiles = self
-            .load_auth_profiles_with_rate_limits(current_auth.as_ref())
-            .await?;
-        let Some(profile) = select_next_auth_profile(&profiles) else {
-            return Err(invalid_request(
-                "no alternative auth profile with available ChatGPT capacity",
-            ));
-        };
-
-        let response = self.activate_auth_profile_by_name(&profile.name).await?;
-        Ok(AuthProfileActivateNextResponse {
-            profile: response.profile,
-            current_account: response.current_account,
-        })
-    }
-
-    async fn activate_auth_profile_by_name(
-        &self,
-        name: &str,
-    ) -> Result<AuthProfileActivateResponse, JSONRPCErrorError> {
-        let profile_auth =
-            load_auth_profile(&self.config.codex_home, name).map_err(|err| match err.kind() {
-                std::io::ErrorKind::NotFound => {
-                    invalid_request(format!("failed to load auth profile: {err}"))
-                }
-                std::io::ErrorKind::InvalidInput => {
-                    invalid_params(format!("failed to load auth profile: {err}"))
-                }
-                _ => internal_error(format!("failed to load auth profile: {err}")),
-            })?;
-
-        let target_store_mode = if matches!(
-            profile_auth.auth_mode,
-            Some(CoreAuthMode::ChatgptAuthTokens)
-        ) {
-            AuthCredentialsStoreMode::Ephemeral
-        } else {
-            self.config.cli_auth_credentials_store_mode
-        };
-
-        save_auth(
-            &self.config.codex_home,
-            &profile_auth,
-            target_store_mode,
-            self.config.auth_keyring_backend_kind(),
-        )
-        .map_err(|err| internal_error(format!("failed to activate auth profile: {err}")))?;
-        self.clear_inactive_auth_storage(target_store_mode)?;
-
-        self.auth_manager.reload().await;
-        self.config_manager.replace_cloud_config_bundle_loader(
-            self.auth_manager.clone(),
-            self.config.chatgpt_base_url.clone(),
-            self.config.http_client_factory(),
-        );
-        self.config_manager
-            .sync_default_client_residency_requirement()
-            .await;
-        Self::maybe_refresh_plugin_caches_for_current_config(
-            &self.config_manager,
-            &self.thread_manager,
-            self.auth_manager.auth_cached(),
-        )
-        .await;
-
-        let current_auth = self.current_auth_dot_json()?;
-        let profiles = self
-            .load_auth_profiles_with_rate_limits(current_auth.as_ref())
-            .await?;
-        let Some(profile) = profiles.into_iter().find(|profile| profile.name == name) else {
-            return Err(internal_error(
-                "activated auth profile disappeared unexpectedly",
-            ));
-        };
-
-        Ok(AuthProfileActivateResponse {
-            current_account: profile.account.clone(),
-            profile,
-        })
-    }
-
-    async fn load_auth_profiles_with_rate_limits(
-        &self,
-        current_auth: Option<&AuthDotJson>,
-    ) -> Result<Vec<AuthProfileSummary>, JSONRPCErrorError> {
-        let mut profiles = list_auth_profiles(&self.config.codex_home, current_auth)
-            .map_err(|err| internal_error(format!("failed to list auth profiles: {err}")))?;
-
-        for profile in &mut profiles {
-            let Ok(auth) = load_auth_profile(&self.config.codex_home, &profile.name) else {
-                continue;
-            };
-            profile.rate_limits = self
-                .cached_rate_limits_for_profile(&profile.name, &auth)
-                .await
-                .map(Into::into);
-        }
-
-        Ok(profiles)
-    }
-
-    async fn delete_auth_profile_response(
-        &self,
-        params: AuthProfileDeleteParams,
-    ) -> Result<AuthProfileDeleteResponse, JSONRPCErrorError> {
-        let deleted =
-            delete_auth_profile(&self.config.codex_home, &params.name).map_err(|err| {
-                if err.kind() == std::io::ErrorKind::InvalidInput {
-                    invalid_params(format!("failed to delete auth profile: {err}"))
-                } else {
-                    internal_error(format!("failed to delete auth profile: {err}"))
-                }
-            })?;
-
-        if deleted {
-            self.auth_profile_rate_limit_cache
-                .lock()
-                .await
-                .remove(&params.name);
-        }
-        Ok(AuthProfileDeleteResponse { deleted })
-    }
-
-    async fn cached_rate_limits_for_profile(
-        &self,
-        profile_name: &str,
-        auth: &AuthDotJson,
-    ) -> Option<CoreRateLimitSnapshot> {
-        if let Some(cached) = self.cached_profile_rate_limits(profile_name).await {
-            return Some(cached);
-        }
-
-        let snapshot = self.try_fetch_rate_limits_for_profile_auth(auth).await?;
-        self.auth_profile_rate_limit_cache.lock().await.insert(
-            profile_name.to_string(),
-            CachedAuthProfileRateLimits {
-                fetched_at: Instant::now(),
-                snapshot: snapshot.clone(),
-            },
-        );
-        Some(snapshot)
-    }
-
-    async fn cached_profile_rate_limits(
-        &self,
-        profile_name: &str,
-    ) -> Option<CoreRateLimitSnapshot> {
-        let cache = self.auth_profile_rate_limit_cache.lock().await;
-        let cached = cache.get(profile_name)?;
-        if cached.fetched_at.elapsed() > AUTH_PROFILE_RATE_LIMIT_CACHE_TTL {
-            return None;
-        }
-        Some(cached.snapshot.clone())
-    }
-
-    async fn try_fetch_rate_limits_for_profile_auth(
-        &self,
-        auth: &AuthDotJson,
-    ) -> Option<CoreRateLimitSnapshot> {
-        let client = self.backend_client_for_profile_auth(auth).ok()??;
-        let response = client.get_rate_limits_with_reset_credits().await.ok()?;
-        response
-            .rate_limits
-            .iter()
-            .find(|snapshot| snapshot.limit_id.as_deref() == Some("codex"))
-            .cloned()
-            .or_else(|| response.rate_limits.first().cloned())
-    }
-
-    fn backend_client_for_profile_auth(
-        &self,
-        auth: &AuthDotJson,
-    ) -> std::io::Result<Option<BackendClient>> {
-        if auth.openai_api_key.is_some() || matches!(auth.auth_mode, Some(CoreAuthMode::ApiKey)) {
-            return Ok(None);
-        }
-
-        let Some(tokens) = auth.tokens.as_ref() else {
-            return Err(IoError::other("chatgpt auth profile is missing tokens"));
-        };
-        if tokens.access_token.is_empty() {
-            return Err(IoError::other(
-                "chatgpt auth profile is missing access token",
-            ));
-        }
-
-        let mut client = BackendClient::new(
-            self.config.chatgpt_base_url.clone(),
-            self.config.http_client_factory(),
-        )
-        .with_auth_provider(Arc::new(BearerAuthProvider::new(
-            tokens.access_token.clone(),
-        )));
-
-        if let Some(account_id) = tokens
-            .account_id
-            .as_deref()
-            .or(tokens.id_token.chatgpt_account_id.as_deref())
-        {
-            client = client.with_chatgpt_account_id(account_id);
-        }
-
-        if tokens.id_token.chatgpt_account_is_fedramp {
-            client = client.with_fedramp_routing_header();
-        }
-
-        Ok(Some(client))
     }
 
     async fn get_account_rate_limits_response(

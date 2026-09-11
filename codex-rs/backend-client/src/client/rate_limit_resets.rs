@@ -75,7 +75,7 @@ impl Client {
         if supports_luna_reserve {
             req = req.header("x-openai-codex-luna-reserve", HeaderValue::from_static("1"));
         }
-        let (body, ct) = self.exec_request(req, "GET", &url).await?;
+        let (body, ct) = self.exec_request_detailed(req, "GET", &url).await?;
         self.decode_json(&url, &ct, &body)
     }
 
