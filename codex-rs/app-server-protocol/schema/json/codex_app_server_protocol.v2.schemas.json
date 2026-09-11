@@ -351,6 +351,16 @@
     },
     "AccountSession": {
       "properties": {
+        "account": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Account"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "displayName": {
           "type": [
             "string",
@@ -375,6 +385,16 @@
         "lastUsedAt": {
           "format": "int64",
           "type": "integer"
+        },
+        "rateLimits": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RateLimitSnapshot"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "selectedWorkspaceAccountId": {
           "type": [

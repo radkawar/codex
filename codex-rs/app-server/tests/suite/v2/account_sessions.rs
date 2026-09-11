@@ -2,6 +2,7 @@ use anyhow::Result;
 use app_test_support::ChatGptAuthFixture;
 use app_test_support::TestAppServer;
 use app_test_support::write_chatgpt_auth;
+use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AccountSession;
 use codex_app_server_protocol::AccountSessionWorkspace;
 use codex_app_server_protocol::AccountSessionWorkspaceKind;
@@ -9,6 +10,7 @@ use codex_app_server_protocol::AccountSessionsResponse;
 use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::load_auth_dot_json;
+use codex_protocol::account::PlanType;
 use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::path::Path;
@@ -95,6 +97,11 @@ async fn list_imports_managed_auth_without_putting_tokens_in_metadata() -> Resul
             active_session_id: Some(session.session_id.clone()),
             sessions: vec![AccountSession {
                 session_id: session.session_id.clone(),
+                account: Some(Account::Chatgpt {
+                    email: Some("person@example.com".to_string()),
+                    plan_type: PlanType::Unknown,
+                }),
+                rate_limits: None,
                 email: Some("person@example.com".to_string()),
                 user_id: Some("user-1".to_string()),
                 display_name: None,
@@ -212,6 +219,11 @@ async fn switch_exchanges_workspace_token_and_updates_active_auth() -> Result<()
             active_session_id: Some(session_id.clone()),
             sessions: vec![AccountSession {
                 session_id,
+                account: Some(Account::Chatgpt {
+                    email: Some("person@example.com".to_string()),
+                    plan_type: PlanType::Unknown,
+                }),
+                rate_limits: None,
                 email: Some("person@example.com".to_string()),
                 user_id: Some("user-1".to_string()),
                 display_name: None,

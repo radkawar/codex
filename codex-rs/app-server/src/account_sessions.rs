@@ -1,4 +1,13 @@
+mod credentials;
+mod migration;
+mod selection;
 mod support;
+
+pub(crate) use credentials::AccountSessionCredentialsSnapshot;
+
+#[cfg(test)]
+#[path = "account_sessions_tests.rs"]
+mod tests;
 
 use chrono::Utc;
 use codex_app_server_protocol::AccountSession;
@@ -42,6 +51,8 @@ pub(crate) enum AccountSessionActivation {
 #[serde(rename_all = "camelCase")]
 struct StoredAccountSessions {
     schema_version: u32,
+    #[serde(default)]
+    legacy_profiles_migrated: bool,
     active_session_id: Option<String>,
     sessions: Vec<StoredAccountSession>,
 }
@@ -50,6 +61,7 @@ impl Default for StoredAccountSessions {
     fn default() -> Self {
         Self {
             schema_version: ACCOUNT_SESSIONS_SCHEMA_VERSION,
+            legacy_profiles_migrated: false,
             active_session_id: None,
             sessions: Vec::new(),
         }
@@ -126,15 +138,13 @@ impl<'a> AccountSessionsStore<'a> {
             ));
         }
         let _lock = self.acquire_lock().await?;
+        let previous_active_session_id = self
+            .read_unlocked()?
+            .and_then(|stored| stored.active_session_id);
         let mut stored = self.load_unlocked().await?;
         self.sync_active_auth_unlocked(&mut stored)?;
-        let mut session = Self::session_from_auth_json(auth_json)
-            .ok_or_else(|| std::io::Error::other("No active ChatGPT auth session to add"))?;
-
-        let existing_index = stored
-            .sessions
-            .iter()
-            .position(|saved| Self::same_identity(saved, auth_json));
+        let mut session = Self::session_from_auth_json(auth_json);
+        let existing_index = self.find_matching_session(&stored, auth_json)?;
         if let Some(index) = existing_index {
             session
                 .session_id
@@ -149,6 +159,11 @@ impl<'a> AccountSessionsStore<'a> {
             stored.sessions.push(session);
         }
 
+        if activation == AccountSessionActivation::RestorePrevious
+            && previous_active_session_id.is_some()
+        {
+            stored.active_session_id = previous_active_session_id;
+        }
         let activate_added_account = match activation {
             AccountSessionActivation::Activate => true,
             AccountSessionActivation::RestorePrevious => stored.active_session_id.is_none(),
@@ -166,7 +181,7 @@ impl<'a> AccountSessionsStore<'a> {
         }
 
         self.save_unlocked(&stored)?;
-        Ok(Self::response(stored))
+        self.response(stored)
     }
 
     pub(crate) async fn list(
@@ -182,7 +197,7 @@ impl<'a> AccountSessionsStore<'a> {
             }
         }
         self.save_unlocked(&stored)?;
-        Ok(Self::response(stored))
+        self.response(stored)
     }
 
     pub(crate) async fn logout(
@@ -192,11 +207,13 @@ impl<'a> AccountSessionsStore<'a> {
         let _lock = self.acquire_lock().await?;
         let mut stored = self.load_unlocked().await?;
         self.sync_active_auth_unlocked(&mut stored)?;
+        let session_id = Self::resolve_session_id(&stored, session_id)?;
+        let session_id = session_id.as_str();
         let index = stored
             .sessions
             .iter()
             .position(|session| session.session_id == session_id)
-            .ok_or_else(|| std::io::Error::other("Saved ChatGPT account session not found"))?;
+            .ok_or_else(|| std::io::Error::other("Saved account session not found"))?;
         let removed = stored.sessions.remove(index);
         if let Err(err) = self
             .revoke_and_delete_session_auth(&removed.session_id)
@@ -220,7 +237,7 @@ impl<'a> AccountSessionsStore<'a> {
         }
 
         self.save_unlocked(&stored)?;
-        Ok(Self::response(stored))
+        self.response(stored)
     }
 
     pub(crate) async fn switch(
@@ -231,23 +248,34 @@ impl<'a> AccountSessionsStore<'a> {
         let _lock = self.acquire_lock().await?;
         let mut stored = self.load_unlocked().await?;
         self.sync_active_auth_unlocked(&mut stored)?;
+        let session_id = Self::resolve_session_id(&stored, session_id)?;
+        let session_id = session_id.as_str();
         let index = stored
             .sessions
             .iter()
             .position(|session| session.session_id == session_id)
-            .ok_or_else(|| std::io::Error::other("Saved ChatGPT account session not found"))?;
-        let session_home = self.session_home(session_id);
-        let manager = self.session_auth_manager(session_home.clone()).await;
-        let auth = manager
-            .auth()
-            .await
-            .ok_or_else(|| std::io::Error::other("Saved ChatGPT account session has no auth"))?;
-        if !matches!(auth, CodexAuth::Chatgpt(_)) {
-            return Err(std::io::Error::other(
-                "Saved account session is not a Codex-managed ChatGPT login",
+            .ok_or_else(|| std::io::Error::other("Saved account session not found"))?;
+        let manager = self
+            .session_auth_manager(self.session_home(session_id))
+            .await;
+        let auth = manager.auth().await.ok_or_else(|| {
+            std::io::Error::new(
+                ErrorKind::PermissionDenied,
+                "Saved account session has no permitted auth",
+            )
+        })?;
+        if !self.config.auth_config().allows_auth(&auth) {
+            return Err(std::io::Error::new(
+                ErrorKind::PermissionDenied,
+                "Saved account session is not allowed by the active authentication policy",
             ));
         }
         if let Some(account_id) = account_id {
+            if !matches!(auth, CodexAuth::Chatgpt(_)) {
+                return Err(std::io::Error::other(
+                    "Workspace switching requires a Codex-managed ChatGPT login",
+                ));
+            }
             let token_data = auth.get_token_data()?;
             let mut client = BackendClient::from_auth(
                 self.config.chatgpt_base_url.clone(),
@@ -295,12 +323,7 @@ impl<'a> AccountSessionsStore<'a> {
             tokens.account_id = Some(account_id.to_string());
             auth_json.last_refresh = Some(Utc::now());
             self.save_session_auth(session_id, &auth_json)?;
-            save_auth(
-                &self.config.codex_home,
-                &auth_json,
-                self.config.cli_auth_credentials_store_mode,
-                self.config.auth_keyring_backend_kind(),
-            )?;
+            self.save_session_as_active(session_id)?;
 
             let session = &mut stored.sessions[index];
             session.selected_workspace_account_id = Some(account_id.to_string());
@@ -317,7 +340,7 @@ impl<'a> AccountSessionsStore<'a> {
         session.last_used_at = Utc::now().timestamp();
         stored.active_session_id = Some(session_id.to_string());
         self.save_unlocked(&stored)?;
-        Ok(Self::response(stored))
+        self.response(stored)
     }
 
     pub(crate) async fn sync_active_auth(&self) -> std::io::Result<()> {
@@ -339,9 +362,14 @@ impl<'a> AccountSessionsStore<'a> {
 
     pub(crate) async fn revoke_all_and_clear(&self) -> std::io::Result<bool> {
         let _lock = self.acquire_lock().await?;
-        let Some(stored) = self.read_unlocked()? else {
-            return Ok(false);
+        let stored = match self.load_unlocked().await {
+            Ok(stored) => stored,
+            Err(err) => {
+                tracing::warn!("failed to read saved accounts during logout: {err}");
+                StoredAccountSessions::default()
+            }
         };
+        let had_sessions = !stored.sessions.is_empty();
         for session in stored.sessions {
             if let Err(err) = self
                 .revoke_and_delete_session_auth(&session.session_id)
@@ -350,42 +378,21 @@ impl<'a> AccountSessionsStore<'a> {
                 tracing::warn!("failed to revoke saved account session during logout: {err}");
             }
         }
-        match std::fs::remove_file(self.path()) {
-            Ok(()) => Ok(true),
-            Err(err) if err.kind() == ErrorKind::NotFound => Ok(true),
-            Err(err) => Err(err),
-        }
+        self.save_unlocked(&StoredAccountSessions {
+            legacy_profiles_migrated: true,
+            ..StoredAccountSessions::default()
+        })?;
+        Ok(had_sessions)
     }
 
     async fn load_unlocked(&self) -> std::io::Result<StoredAccountSessions> {
-        match self.read_unlocked()? {
-            Some(stored) => Ok(stored),
-            None => {
-                let Some(auth) = self.auth_manager.auth().await else {
-                    return Ok(StoredAccountSessions::default());
-                };
-                if !matches!(auth, CodexAuth::Chatgpt(_)) {
-                    return Ok(StoredAccountSessions::default());
-                }
-                let Some(auth_json) = self
-                    .load_active_auth()?
-                    .filter(Self::is_managed_chatgpt_auth_json)
-                else {
-                    return Ok(StoredAccountSessions::default());
-                };
-                let Some(session) = Self::session_from_auth_json(&auth_json) else {
-                    return Ok(StoredAccountSessions::default());
-                };
-                self.save_session_auth(&session.session_id, &auth_json)?;
-                let stored = StoredAccountSessions {
-                    active_session_id: Some(session.session_id.clone()),
-                    sessions: vec![session],
-                    ..StoredAccountSessions::default()
-                };
-                self.save_unlocked(&stored)?;
-                Ok(stored)
-            }
+        let mut stored = self.read_unlocked()?.unwrap_or_default();
+        if !stored.legacy_profiles_migrated {
+            self.sync_active_auth_unlocked(&mut stored)?;
+            self.migrate_legacy_profiles_unlocked(&mut stored)?;
+            self.save_unlocked(&stored)?;
         }
+        Ok(stored)
     }
 
     fn read_unlocked(&self) -> std::io::Result<Option<StoredAccountSessions>> {
@@ -400,6 +407,17 @@ impl<'a> AccountSessionsStore<'a> {
                 "unsupported account session schema version {}",
                 stored.schema_version
             )));
+        }
+        let mut session_ids = std::collections::HashSet::new();
+        for session in &stored.sessions {
+            if uuid::Uuid::parse_str(&session.session_id).is_err()
+                || !session_ids.insert(&session.session_id)
+            {
+                return Err(std::io::Error::new(
+                    ErrorKind::InvalidData,
+                    "saved account metadata contains an invalid or duplicate session ID",
+                ));
+            }
         }
         if stored.active_session_id.as_ref().is_some_and(|active| {
             !stored
@@ -436,25 +454,21 @@ impl<'a> AccountSessionsStore<'a> {
     }
 
     fn sync_active_auth_unlocked(&self, stored: &mut StoredAccountSessions) -> std::io::Result<()> {
-        let Some(active_session_id) = stored.active_session_id.as_ref() else {
-            return Ok(());
-        };
         let Some(auth_json) = self.load_active_auth()? else {
+            stored.active_session_id = None;
             return Ok(());
         };
-        let Some(session) = stored
-            .sessions
-            .iter_mut()
-            .find(|session| &session.session_id == active_session_id)
-        else {
+        let Some(index) = self.find_matching_session(stored, &auth_json)? else {
+            stored.active_session_id = None;
             return Ok(());
         };
-        if !Self::is_managed_chatgpt_auth_json(&auth_json)
-            || !Self::same_identity(session, &auth_json)
-        {
-            return Ok(());
-        }
+        let session = &mut stored.sessions[index];
+        stored.active_session_id = Some(session.session_id.clone());
         self.save_session_auth(&session.session_id, &auth_json)?;
+        if let Some(tokens) = auth_json.tokens.as_ref() {
+            session.email.clone_from(&tokens.id_token.email);
+            session.user_id.clone_from(&tokens.id_token.chatgpt_user_id);
+        }
         if let Some(account_id) = auth_json
             .tokens
             .as_ref()

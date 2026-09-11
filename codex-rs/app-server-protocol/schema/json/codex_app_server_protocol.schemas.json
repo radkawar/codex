@@ -7290,6 +7290,16 @@
       },
       "AccountSession": {
         "properties": {
+          "account": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/Account"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "displayName": {
             "type": [
               "string",
@@ -7314,6 +7324,16 @@
           "lastUsedAt": {
             "format": "int64",
             "type": "integer"
+          },
+          "rateLimits": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/v2/RateLimitSnapshot"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "selectedWorkspaceAccountId": {
             "type": [

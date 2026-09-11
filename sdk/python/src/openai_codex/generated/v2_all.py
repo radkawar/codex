@@ -10380,11 +10380,13 @@ class AccountSession(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
     )
+    account: Account | None = None
     display_name: Annotated[str | None, Field(alias="displayName")] = None
     email: str | None = None
     image_url: Annotated[str | None, Field(alias="imageUrl")] = None
     is_active: Annotated[bool, Field(alias="isActive")]
     last_used_at: Annotated[int, Field(alias="lastUsedAt")]
+    rate_limits: Annotated[RateLimitSnapshot | None, Field(alias="rateLimits")] = None
     selected_workspace_account_id: Annotated[
         str | None, Field(alias="selectedWorkspaceAccountId")
     ] = None

@@ -220,7 +220,7 @@ pub struct AccountSessionsSwitchParams {
     pub account_id: Option<String>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AccountSessionsResponse {
@@ -228,11 +228,13 @@ pub struct AccountSessionsResponse {
     pub sessions: Vec<AccountSession>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(export_to = "v2/")]
 pub struct AccountSession {
     pub session_id: String,
+    pub account: Option<Account>,
+    pub rate_limits: Option<RateLimitSnapshot>,
     pub email: Option<String>,
     pub user_id: Option<String>,
     pub display_name: Option<String>,

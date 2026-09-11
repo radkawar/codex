@@ -2331,7 +2331,9 @@ async fn account_session_device_login_saves_new_account_without_switching(
             (Some("device@example.com"), false),
             (Some("original@example.com"), true),
         ],
-        ExistingSessionLoginAuth::ApiKey => vec![(Some("device@example.com"), false)],
+        ExistingSessionLoginAuth::ApiKey => {
+            vec![(None, true), (Some("device@example.com"), false)]
+        }
     };
     assert_eq!(identities, expected_identities);
     let added = sessions

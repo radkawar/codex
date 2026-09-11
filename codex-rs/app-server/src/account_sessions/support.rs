@@ -1,6 +1,10 @@
 use super::*;
+use crate::auth_profiles::account_from_auth;
+use crate::auth_profiles::auth_mode_from_auth;
+use codex_app_server_protocol::Account;
 use codex_backend_client::AccountEntry;
 use codex_backend_client::Client as BackendClient;
+use codex_login::AuthCredentialsStoreMode;
 use codex_protocol::auth::AuthMode;
 use std::fs::OpenOptions;
 #[cfg(unix)]
@@ -71,12 +75,14 @@ impl AccountSessionsStore<'_> {
         }
     }
 
-    pub(super) fn session_from_auth_json(auth_json: &AuthDotJson) -> Option<StoredAccountSession> {
-        let tokens = auth_json.tokens.as_ref()?;
-        let selected_workspace_account_id = tokens
-            .account_id
-            .clone()
-            .or_else(|| tokens.id_token.chatgpt_account_id.clone());
+    pub(super) fn session_from_auth_json(auth_json: &AuthDotJson) -> StoredAccountSession {
+        let tokens = auth_json.tokens.as_ref();
+        let selected_workspace_account_id = tokens.and_then(|tokens| {
+            tokens
+                .account_id
+                .clone()
+                .or_else(|| tokens.id_token.chatgpt_account_id.clone())
+        });
         let workspaces = selected_workspace_account_id
             .as_ref()
             .map(|account_id| {
@@ -88,16 +94,46 @@ impl AccountSessionsStore<'_> {
                 }]
             })
             .unwrap_or_default();
-        Some(StoredAccountSession {
+        StoredAccountSession {
             session_id: Uuid::now_v7().to_string(),
-            email: tokens.id_token.email.clone(),
-            user_id: tokens.id_token.chatgpt_user_id.clone(),
+            email: match account_from_auth(auth_json) {
+                Some(Account::Chatgpt { email, .. }) => email,
+                Some(Account::ApiKey {} | Account::AmazonBedrock { .. }) | None => None,
+            },
+            user_id: tokens.and_then(|tokens| tokens.id_token.chatgpt_user_id.clone()),
             display_name: None,
             image_url: None,
             last_used_at: Utc::now().timestamp(),
             selected_workspace_account_id,
             workspaces,
-        })
+        }
+    }
+
+    pub(super) fn find_matching_session(
+        &self,
+        stored: &StoredAccountSessions,
+        auth_json: &AuthDotJson,
+    ) -> std::io::Result<Option<usize>> {
+        let mut comparable_auth = auth_json.clone();
+        let auth_mode = auth_mode_from_auth(auth_json);
+        comparable_auth.auth_mode = None;
+        comparable_auth.last_refresh = None;
+        for (index, session) in stored.sessions.iter().enumerate() {
+            let Some(mut saved_auth) = self.load_session_auth(&session.session_id)? else {
+                continue;
+            };
+            let managed = Self::is_managed_chatgpt_auth_json(auth_json);
+            let saved_managed = Self::is_managed_chatgpt_auth_json(&saved_auth);
+            let saved_auth_mode = auth_mode_from_auth(&saved_auth);
+            saved_auth.auth_mode = None;
+            saved_auth.last_refresh = None;
+            if (managed && saved_managed && Self::same_identity(session, auth_json))
+                || (saved_auth_mode == auth_mode && saved_auth == comparable_auth)
+            {
+                return Ok(Some(index));
+            }
+        }
+        Ok(None)
     }
 
     pub(super) fn same_identity(session: &StoredAccountSession, auth_json: &AuthDotJson) -> bool {
@@ -113,7 +149,7 @@ impl AccountSessionsStore<'_> {
                 .email
                 .as_ref()
                 .zip(tokens.id_token.email.as_ref())
-                .is_some_and(|(saved, active)| saved == active),
+                .is_some_and(|(saved, active)| saved.eq_ignore_ascii_case(active)),
         }
     }
 
@@ -143,31 +179,46 @@ impl AccountSessionsStore<'_> {
         }
     }
 
-    pub(super) fn response(stored: StoredAccountSessions) -> AccountSessionsResponse {
+    pub(super) fn response(
+        &self,
+        stored: StoredAccountSessions,
+    ) -> std::io::Result<AccountSessionsResponse> {
         let active_session_id = stored.active_session_id;
         let mut sessions = stored
             .sessions
             .into_iter()
-            .map(|session| AccountSession {
-                is_active: Some(&session.session_id) == active_session_id.as_ref(),
-                session_id: session.session_id,
-                email: session.email,
-                user_id: session.user_id,
-                display_name: session.display_name,
-                image_url: session.image_url,
-                last_used_at: session.last_used_at,
-                selected_workspace_account_id: session.selected_workspace_account_id,
-                workspaces: session.workspaces,
+            .map(|session| {
+                let auth = self.load_session_auth(&session.session_id)?;
+                Ok(AccountSession {
+                    account: auth.as_ref().and_then(account_from_auth),
+                    rate_limits: None,
+                    is_active: Some(&session.session_id) == active_session_id.as_ref(),
+                    session_id: session.session_id,
+                    email: session.email,
+                    user_id: session.user_id,
+                    display_name: session.display_name,
+                    image_url: session.image_url,
+                    last_used_at: session.last_used_at,
+                    selected_workspace_account_id: session.selected_workspace_account_id,
+                    workspaces: session.workspaces,
+                })
             })
-            .collect::<Vec<_>>();
+            .collect::<std::io::Result<Vec<_>>>()?;
         sessions.sort_by_key(|session| std::cmp::Reverse(session.last_used_at));
-        AccountSessionsResponse {
+        Ok(AccountSessionsResponse {
             active_session_id,
             sessions,
-        }
+        })
     }
 
     pub(super) fn load_active_auth(&self) -> std::io::Result<Option<AuthDotJson>> {
+        if let Some(auth) = load_auth_dot_json(
+            &self.config.codex_home,
+            AuthCredentialsStoreMode::Ephemeral,
+            self.config.auth_keyring_backend_kind(),
+        )? {
+            return Ok(Some(auth));
+        }
         load_auth_dot_json(
             &self.config.codex_home,
             self.config.cli_auth_credentials_store_mode,
@@ -204,13 +255,33 @@ impl AccountSessionsStore<'_> {
     pub(super) fn save_session_as_active(&self, session_id: &str) -> std::io::Result<()> {
         let auth_json = self
             .load_session_auth(session_id)?
-            .ok_or_else(|| std::io::Error::other("Saved ChatGPT account session has no auth"))?;
+            .ok_or_else(|| std::io::Error::other("Saved account session has no auth"))?;
+        let target_store_mode = if auth_json.auth_mode == Some(AuthMode::ChatgptAuthTokens) {
+            AuthCredentialsStoreMode::Ephemeral
+        } else {
+            self.config.cli_auth_credentials_store_mode
+        };
         save_auth(
             &self.config.codex_home,
             &auth_json,
-            self.config.cli_auth_credentials_store_mode,
+            target_store_mode,
             self.config.auth_keyring_backend_kind(),
-        )
+        )?;
+        if target_store_mode != AuthCredentialsStoreMode::Ephemeral {
+            codex_login::logout(
+                &self.config.codex_home,
+                AuthCredentialsStoreMode::Ephemeral,
+                self.config.auth_keyring_backend_kind(),
+            )?;
+        }
+        if target_store_mode != self.config.cli_auth_credentials_store_mode {
+            codex_login::logout(
+                &self.config.codex_home,
+                self.config.cli_auth_credentials_store_mode,
+                self.config.auth_keyring_backend_kind(),
+            )?;
+        }
+        Ok(())
     }
 
     pub(super) async fn acquire_lock(&self) -> std::io::Result<AccountSessionsLock> {

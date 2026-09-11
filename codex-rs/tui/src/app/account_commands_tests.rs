@@ -7,6 +7,8 @@ fn formats_active_account_and_selected_workspace_without_credentials() {
     let response = AccountSessionsResponse {
         active_session_id: Some("session-1".to_string()),
         sessions: vec![AccountSession {
+            account: None,
+            rate_limits: None,
             session_id: "session-1".to_string(),
             email: Some("user@example.com".to_string()),
             user_id: Some("user-1".to_string()),
