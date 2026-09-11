@@ -2,27 +2,8 @@ use super::App;
 use crate::app_server_session::AppServerSession;
 use codex_app_server_protocol::AccountSession;
 use codex_app_server_protocol::AccountSessionsResponse;
-use codex_app_server_protocol::LoginAccountResponse;
 
 impl App {
-    pub(super) async fn start_account_login(&mut self, app_server: &mut AppServerSession) {
-        match app_server.start_account_session_login().await {
-            Ok(LoginAccountResponse::Chatgpt { auth_url, .. }) => {
-                self.open_url_in_browser(auth_url.clone());
-                self.chat_widget.add_info_message(
-                    "Continue signing in with ChatGPT in your browser.".to_string(),
-                    Some(auth_url),
-                );
-            }
-            Ok(other) => self.chat_widget.add_error_message(format!(
-                "Unexpected accountSession/login/start response: {other:?}"
-            )),
-            Err(err) => self
-                .chat_widget
-                .add_error_message(format!("Login failed: {err}")),
-        }
-    }
-
     pub(super) async fn show_account_sessions(&mut self, app_server: &mut AppServerSession) {
         match app_server.list_account_sessions().await {
             Ok(response) => self.show_account_sessions_response(response),

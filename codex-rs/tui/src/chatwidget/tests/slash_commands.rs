@@ -1,4 +1,5 @@
 use super::*;
+use crate::app_event::AccountLoginMethod;
 use crate::bottom_pane::slash_commands::ServiceTierCommand;
 use pretty_assertions::assert_eq;
 use serial_test::serial;
@@ -422,6 +423,12 @@ async fn queued_slash_menu_cancel_drains_next_input() {
         "/permissions",
         "Update Model Permissions",
         KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+    )
+    .await;
+    assert_cancelled_queued_menu_drains_next_input(
+        "/login",
+        "Add a ChatGPT account",
+        KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE),
     )
     .await;
 }
@@ -1971,11 +1978,93 @@ async fn slash_logout_requests_app_server_logout() {
 }
 
 #[tokio::test]
-async fn account_commands_request_login_list_switch_and_session_logout() {
+async fn slash_login_picker_offers_browser_and_device_code() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.dispatch_command(SlashCommand::Login);
-    assert_matches!(rx.try_recv(), Ok(AppEvent::StartAccountLogin));
+    insta::assert_snapshot!(render_bottom_popup(&chat, /*width*/ 80));
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+
+    for (key, expected_method) in [
+        ('1', AccountLoginMethod::Browser),
+        ('2', AccountLoginMethod::DeviceCode),
+    ] {
+        chat.handle_key_event(KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE));
+        assert_matches!(
+            rx.try_recv(),
+            Ok(AppEvent::StartAccountLogin { method }) if method == expected_method
+        );
+        assert_matches!(rx.try_recv(), Ok(AppEvent::SettingsSelectionClosed));
+        if expected_method == AccountLoginMethod::Browser {
+            chat.dispatch_command(SlashCommand::Login);
+        }
+    }
+}
+
+#[tokio::test]
+async fn slash_login_inline_methods_and_cancel_dispatch_from_composer() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    for (command, expected_method) in [
+        ("/login browser", Some(AccountLoginMethod::Browser)),
+        ("/login device", Some(AccountLoginMethod::DeviceCode)),
+        ("/login --device-auth", Some(AccountLoginMethod::DeviceCode)),
+        ("/login cancel", None),
+    ] {
+        submit_composer_text(&mut chat, command);
+        let methods: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|event| match event {
+                AppEvent::StartAccountLogin { method } => Some(Some(method)),
+                AppEvent::CancelAccountLogin => Some(None),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(methods, vec![expected_method]);
+        assert_eq!(recall_latest_after_clearing(&mut chat), command);
+        assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+    }
+}
+
+#[tokio::test]
+async fn slash_login_invalid_args_show_usage() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.dispatch_command_with_args(SlashCommand::Login, "device extra".to_string(), Vec::new());
+
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    insta::assert_snapshot!(rendered);
+}
+
+#[tokio::test]
+async fn queued_device_login_runs_after_the_active_turn() {
+    let (mut chat, mut rx, mut op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    chat.thread_id = Some(ThreadId::new());
+    handle_turn_started(&mut chat, "turn-1");
+
+    queue_composer_text_with_tab(&mut chat, "/login device");
+    assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+
+    complete_turn_with_message(&mut chat, "turn-1", Some("done"));
+
+    let methods: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok())
+        .filter_map(|event| match event {
+            AppEvent::StartAccountLogin { method } => Some(method),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(methods, vec![AccountLoginMethod::DeviceCode]);
+    assert!(chat.input_queue.queued_user_messages.is_empty());
+    assert_matches!(op_rx.try_recv(), Err(TryRecvError::Empty));
+}
+
+#[tokio::test]
+async fn account_commands_request_list_switch_and_session_logout() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
     chat.dispatch_command(SlashCommand::Account);
     assert_matches!(rx.try_recv(), Ok(AppEvent::ListAccountSessions));

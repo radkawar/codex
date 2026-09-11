@@ -1,0 +1,7 @@
+---
+source: tui/src/app/account_login_tests.rs
+expression: render_history(&mut events)
+---
+■ Login failed: accountSession/login/start failed in TUI:
+accountSession/login/start failed: device code unavailable (code -32603). Use
+/login to try again.

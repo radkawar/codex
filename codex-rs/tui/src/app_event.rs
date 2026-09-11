@@ -76,6 +76,13 @@ use codex_realtime_webrtc::StartedRealtimeWebrtcSession;
 
 use crate::history_cell::HistoryCell;
 
+/// Supported ways to add a managed ChatGPT account from the TUI.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum AccountLoginMethod {
+    Browser,
+    DeviceCode,
+}
+
 /// Confirmed server lifecycle operations available from the agents dashboard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AgentsOverviewAction {
@@ -608,8 +615,13 @@ pub(crate) enum AppEvent {
     /// Request app-server account logout, then exit after it succeeds.
     Logout,
 
-    /// Start a browser-based login that adds another saved ChatGPT account.
-    StartAccountLogin,
+    /// Start a login that adds another saved ChatGPT account.
+    StartAccountLogin {
+        method: AccountLoginMethod,
+    },
+
+    /// Cancel the account login started by this TUI.
+    CancelAccountLogin,
 
     /// List saved ChatGPT account sessions.
     ListAccountSessions,

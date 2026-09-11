@@ -287,18 +287,7 @@ impl App {
                 return;
             }
             ServerNotification::AccountLoginCompleted(notification) => {
-                if notification.success {
-                    self.chat_widget.add_info_message(
-                        "ChatGPT account added. Use /account to view or switch accounts."
-                            .to_string(),
-                        /*hint*/ None,
-                    );
-                } else {
-                    self.chat_widget.add_error_message(format!(
-                        "Login failed: {}",
-                        notification.error.as_deref().unwrap_or("unknown error")
-                    ));
-                }
+                self.on_account_login_completed(notification);
                 return;
             }
             ServerNotification::ExternalAgentConfigImportCompleted(notification) => {

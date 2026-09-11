@@ -159,7 +159,7 @@ impl SlashCommand {
             SlashCommand::Mcp => "list configured MCP tools; use /mcp verbose for details",
             SlashCommand::Apps => "manage apps",
             SlashCommand::Plugins => "browse plugins",
-            SlashCommand::Login => "add another ChatGPT account",
+            SlashCommand::Login => "add a ChatGPT account with browser or device code login",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
             SlashCommand::TestApproval => "test approval request",
@@ -197,6 +197,7 @@ impl SlashCommand {
                 | SlashCommand::Btw
                 | SlashCommand::Resume
                 | SlashCommand::Account
+                | SlashCommand::Login
                 | SlashCommand::Prime
                 | SlashCommand::Loop
         )

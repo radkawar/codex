@@ -1,0 +1,16 @@
+---
+source: tui/src/app/account_login_tests.rs
+expression: instructions
+---
+Sign in with ChatGPT using a device code:
+
+1. Open this link on any device and sign in:
+https://auth.example.com/codex/device
+
+2. Enter this one-time code (expires in 15 minutes):
+ABCD-EFGH
+
+Continue only if you started this login in Codex. If a website or another person
+gave you this code, cancel.
+Waiting for sign-in. Use /login cancel to cancel or /login device to request a
+new code.

@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+expression: "render_bottom_popup(&chat, 80)"
+---
+  Add a ChatGPT account
+  Choose how to sign in.
+
+› 1. Browser      Open a browser on this computer
+  2. Device code  Use a code in a browser on any device (/login device)
+
+  Press enter to confirm or esc to go back

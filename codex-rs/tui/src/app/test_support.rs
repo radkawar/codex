@@ -40,6 +40,7 @@ pub(super) async fn make_test_app() -> App {
         last_rendered_history_tail: None,
         last_thread_usage_status_cell: None,
         pending_thread_usage_history_refresh: false,
+        account_login_id: None,
         overlay: None,
         deferred_history_lines: Vec::new(),
         has_emitted_history_lines: false,

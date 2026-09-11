@@ -202,6 +202,7 @@ use tokio::task::JoinHandle;
 use toml::Value as TomlValue;
 use uuid::Uuid;
 mod account_commands;
+mod account_login;
 mod agent_message_consolidation;
 mod agent_navigation;
 mod agent_picker;
@@ -559,6 +560,7 @@ pub(crate) struct App {
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) chat_widget: ChatWidget,
     workspace_command_runner: Option<WorkspaceCommandRunner>,
+    account_login_id: Option<String>,
     /// Legacy bootstrap and server-setting inputs; local preferences live in `local_settings`.
     pub(crate) config: Config,
     pub(crate) local_settings: crate::local_settings::LocalSettings,

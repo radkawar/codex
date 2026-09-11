@@ -3,6 +3,7 @@
 //! This module owns the typed JSON-RPC calls needed by the TUI and keeps
 //! request/response plumbing out of `App` and `ChatWidget`.
 
+mod account_login;
 mod fs;
 mod history;
 mod models;
@@ -57,8 +58,6 @@ use codex_app_server_protocol::GetAccountParams;
 use codex_app_server_protocol::GetAccountRateLimitsResponse;
 use codex_app_server_protocol::GetAccountResponse;
 use codex_app_server_protocol::JSONRPCErrorError;
-use codex_app_server_protocol::LoginAccountParams;
-use codex_app_server_protocol::LoginAccountResponse;
 use codex_app_server_protocol::LogoutAccountResponse;
 use codex_app_server_protocol::MemoryResetResponse;
 use codex_app_server_protocol::Model as ApiModel;
@@ -1539,21 +1538,6 @@ impl AppServerSession {
             .await
             .wrap_err("account/logout failed in TUI")?;
         Ok(())
-    }
-
-    pub(crate) async fn start_account_session_login(&mut self) -> Result<LoginAccountResponse> {
-        let request_id = self.next_request_id();
-        self.client
-            .request_typed(ClientRequest::AccountSessionsLogin {
-                request_id,
-                params: LoginAccountParams::Chatgpt {
-                    app_brand: None,
-                    codex_streamlined_login: false,
-                    use_hosted_login_success_page: false,
-                },
-            })
-            .await
-            .wrap_err("accountSession/login/start failed in TUI")
     }
 
     pub(crate) async fn list_account_sessions(&mut self) -> Result<AccountSessionsResponse> {

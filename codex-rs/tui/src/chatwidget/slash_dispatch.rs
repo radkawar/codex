@@ -436,7 +436,7 @@ impl ChatWidget {
                 self.app_event_tx.send(AppEvent::Logout);
             }
             SlashCommand::Login => {
-                self.app_event_tx.send(AppEvent::StartAccountLogin);
+                self.handle_account_login_command("");
             }
             SlashCommand::Account => {
                 self.app_event_tx.send(AppEvent::ListAccountSessions);
@@ -788,6 +788,7 @@ impl ChatWidget {
             SlashCommand::Ide => {
                 self.handle_ide_command_args(trimmed);
             }
+            SlashCommand::Login => self.handle_account_login_command(trimmed),
             SlashCommand::Mcp => match trimmed.to_ascii_lowercase().as_str() {
                 "verbose" => self.add_mcp_output(McpServerStatusDetail::Full),
                 _ => self.add_error_message("Usage: /mcp [verbose]".to_string()),

@@ -825,8 +825,11 @@ impl App {
                         .add_error_message(format!("Logout failed: {err}"));
                 }
             },
-            AppEvent::StartAccountLogin => {
-                self.start_account_login(app_server).await;
+            AppEvent::StartAccountLogin { method } => {
+                self.start_account_login(app_server, method).await;
+            }
+            AppEvent::CancelAccountLogin => {
+                self.cancel_account_login(app_server).await;
             }
             AppEvent::ListAccountSessions => {
                 self.show_account_sessions(app_server).await;
