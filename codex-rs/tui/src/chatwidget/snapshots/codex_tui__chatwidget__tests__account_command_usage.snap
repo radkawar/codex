@@ -1,0 +1,17 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+expression: rendered
+---
+■ Usage: /account switch <email|id> [workspace-id]
+
+
+■ Usage: /account switch <email|id> [workspace-id]
+
+
+■ Usage: /account logout <email|id>
+
+
+■ Usage: /account logout <email|id>
+
+
+■ Usage: /account [list | switch <email|id> [workspace-id] | logout <email|id> | next | autoswitch [on|off|status]]

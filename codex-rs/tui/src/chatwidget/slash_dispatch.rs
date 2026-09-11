@@ -37,7 +37,7 @@ const SIDE_SLASH_COMMAND_UNAVAILABLE_HINT: &str =
     "Press Ctrl+C to return to the main thread first.";
 const GOAL_USAGE_HINT: &str = "Example: /goal improve benchmark coverage";
 const RAW_USAGE: &str = "Usage: /raw [on|off]";
-const ACCOUNT_USAGE: &str = "Usage: /account [list | session switch <session-id> [workspace-id] | session logout <session-id> | save <name> [--overwrite] | use <name> | delete <name> | next | autoswitch [on|off|status]]";
+const ACCOUNT_USAGE: &str = "Usage: /account [list | switch <email|id> [workspace-id] | logout <email|id> | next | autoswitch [on|off|status]]";
 const PRIME_USAGE: &str = "Usage: /prime [status | once | stop | start [interval]]";
 const USAGE_CHATGPT_LOGIN_REQUIRED: &str = "Sign in with ChatGPT to use /usage.";
 
@@ -440,7 +440,6 @@ impl ChatWidget {
             }
             SlashCommand::Account => {
                 self.app_event_tx.send(AppEvent::ListAccountSessions);
-                self.app_event_tx.send(AppEvent::ListAuthProfiles);
             }
             SlashCommand::Copy => {
                 self.show_copy_picker();
@@ -505,10 +504,6 @@ impl ChatWidget {
                         /*refreshing_rate_limits*/ false, /*request_id*/ None,
                     );
                 }
-            }
-            SlashCommand::Accounts => {
-                self.app_event_tx.send(AppEvent::ListAccountSessions);
-                self.app_event_tx.send(AppEvent::ListAuthProfiles);
             }
             SlashCommand::Prime => {
                 self.app_event_tx.send(AppEvent::ReadAccountPrimingStatus);
@@ -832,7 +827,6 @@ impl ChatWidget {
                             return;
                         }
                         self.app_event_tx.send(AppEvent::ListAccountSessions);
-                        self.app_event_tx.send(AppEvent::ListAuthProfiles);
                     }
                     "session" => match (words.next(), words.next(), words.next(), words.next()) {
                         (Some("switch"), Some(session_id), account_id, None) => {
@@ -851,51 +845,31 @@ impl ChatWidget {
                             return;
                         }
                     },
-                    "save" => {
-                        let Some(name) = words.next() else {
+                    "use" | "switch" => match (words.next(), words.next(), words.next()) {
+                        (Some(session_id), account_id, None) => {
+                            self.app_event_tx.send(AppEvent::SwitchAccountSession {
+                                session_id: session_id.to_string(),
+                                account_id: account_id.map(str::to_string),
+                            });
+                        }
+                        _ => {
                             self.add_error_message(
-                                "Usage: /account save <name> [--overwrite]".to_string(),
+                                "Usage: /account switch <email|id> [workspace-id]".to_string(),
                             );
                             return;
-                        };
-                        let overwrite = matches!(words.next(), Some("--overwrite"));
-                        if words.next().is_some() {
-                            self.add_error_message(
-                                "Usage: /account save <name> [--overwrite]".to_string(),
-                            );
+                        }
+                    },
+                    "logout" | "delete" | "remove" | "rm" => match (words.next(), words.next()) {
+                        (Some(session_id), None) => {
+                            self.app_event_tx.send(AppEvent::LogoutAccountSession {
+                                session_id: session_id.to_string(),
+                            });
+                        }
+                        _ => {
+                            self.add_error_message("Usage: /account logout <email|id>".to_string());
                             return;
                         }
-                        self.app_event_tx.send(AppEvent::SaveAuthProfile {
-                            name: name.to_string(),
-                            overwrite,
-                        });
-                    }
-                    "use" | "switch" => {
-                        let Some(name) = words.next() else {
-                            self.add_error_message("Usage: /account use <name>".to_string());
-                            return;
-                        };
-                        if words.next().is_some() {
-                            self.add_error_message("Usage: /account use <name>".to_string());
-                            return;
-                        }
-                        self.app_event_tx.send(AppEvent::ActivateAuthProfile {
-                            name: name.to_string(),
-                        });
-                    }
-                    "delete" | "remove" | "rm" => {
-                        let Some(name) = words.next() else {
-                            self.add_error_message("Usage: /account delete <name>".to_string());
-                            return;
-                        };
-                        if words.next().is_some() {
-                            self.add_error_message("Usage: /account delete <name>".to_string());
-                            return;
-                        }
-                        self.app_event_tx.send(AppEvent::DeleteAuthProfile {
-                            name: name.to_string(),
-                        });
-                    }
+                    },
                     "next" => {
                         if words.next().is_some() {
                             self.add_error_message("Usage: /account next".to_string());
@@ -923,7 +897,7 @@ impl ChatWidget {
                             "on" => {
                                 self.set_auto_switch_auth_profile_on_rate_limit(true);
                                 self.add_info_message(
-                                    "Automatic auth switching on rate limits enabled for this session."
+                                    "Automatic account switching on rate limits enabled for this session."
                                         .to_string(),
                                     /*hint*/ None,
                                 );
@@ -931,7 +905,7 @@ impl ChatWidget {
                             "off" => {
                                 self.set_auto_switch_auth_profile_on_rate_limit(false);
                                 self.add_info_message(
-                                    "Automatic auth switching on rate limits disabled for this session."
+                                    "Automatic account switching on rate limits disabled for this session."
                                         .to_string(),
                                     /*hint*/ None,
                                 );
@@ -1415,7 +1389,6 @@ impl ChatWidget {
             | SlashCommand::Rename
             | SlashCommand::Voice
             | SlashCommand::Recap
-            | SlashCommand::Accounts
             | SlashCommand::Account
             | SlashCommand::Prime
             | SlashCommand::Loop

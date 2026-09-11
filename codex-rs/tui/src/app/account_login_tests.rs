@@ -213,7 +213,7 @@ async fn login_completion_refreshes_accounts_and_failures_allow_retry() -> Resul
     assert!(matches!(events.try_recv()?, AppEvent::InsertHistoryCell(_)));
     assert!(matches!(events.try_recv()?, AppEvent::ListAccountSessions));
     app.show_account_sessions(&mut session).await;
-    assert!(render_history(&mut events).contains("No saved ChatGPT accounts."));
+    assert!(render_history(&mut events).contains("No saved accounts."));
 
     app.start_account_login(&mut session, AccountLoginMethod::DeviceCode)
         .await;

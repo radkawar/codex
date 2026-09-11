@@ -1,0 +1,11 @@
+---
+source: tui/src/chatwidget/tests/slash_commands.rs
+expression: rendered
+---
+• Automatic account switching on rate limits disabled for this session.
+
+
+• Automatic account switching on rate limits enabled for this session.
+
+
+• Automatic account switching on rate limits is on for this session.

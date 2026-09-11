@@ -237,44 +237,6 @@ impl App {
         });
     }
 
-    pub(super) fn list_auth_profiles(&mut self, app_server: &AppServerSession) {
-        let request_handle = app_server.request_handle();
-        let app_event_tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            let result = list_auth_profiles(request_handle)
-                .await
-                .map_err(|err| err.to_string());
-            app_event_tx.send(AppEvent::AuthProfilesLoaded { result });
-        });
-    }
-
-    pub(super) fn save_auth_profile(
-        &mut self,
-        app_server: &AppServerSession,
-        name: String,
-        overwrite: bool,
-    ) {
-        let request_handle = app_server.request_handle();
-        let app_event_tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            let result = save_auth_profile(request_handle, name, overwrite)
-                .await
-                .map_err(|err| err.to_string());
-            app_event_tx.send(AppEvent::AuthProfileSaved { result });
-        });
-    }
-
-    pub(super) fn activate_auth_profile(&mut self, app_server: &AppServerSession, name: String) {
-        let request_handle = app_server.request_handle();
-        let app_event_tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            let result = activate_auth_profile(request_handle, name)
-                .await
-                .map_err(|err| err.to_string());
-            app_event_tx.send(AppEvent::AuthProfileActivated { result });
-        });
-    }
-
     pub(super) fn activate_next_auth_profile(
         &mut self,
         app_server: &AppServerSession,
@@ -287,17 +249,6 @@ impl App {
                 .await
                 .map_err(|err| err.to_string());
             app_event_tx.send(AppEvent::AuthProfileNextActivated { trigger, result });
-        });
-    }
-
-    pub(super) fn delete_auth_profile(&mut self, app_server: &AppServerSession, name: String) {
-        let request_handle = app_server.request_handle();
-        let app_event_tx = self.app_event_tx.clone();
-        tokio::spawn(async move {
-            let result = delete_auth_profile(request_handle, name)
-                .await
-                .map_err(|err| err.to_string());
-            app_event_tx.send(AppEvent::AuthProfileDeleted { result });
         });
     }
 
@@ -1024,48 +975,6 @@ pub(super) async fn send_add_credits_nudge_email(
     Ok(response.status)
 }
 
-pub(super) async fn list_auth_profiles(
-    request_handle: AppServerRequestHandle,
-) -> Result<codex_app_server_protocol::AuthProfileListResponse> {
-    let request_id = RequestId::String(format!("auth-profile-list-{}", Uuid::new_v4()));
-    request_handle
-        .request_typed(ClientRequest::AuthProfileList {
-            request_id,
-            params: None,
-        })
-        .await
-        .wrap_err("account/authProfile/list failed in TUI")
-}
-
-pub(super) async fn save_auth_profile(
-    request_handle: AppServerRequestHandle,
-    name: String,
-    overwrite: bool,
-) -> Result<codex_app_server_protocol::AuthProfileSaveResponse> {
-    let request_id = RequestId::String(format!("auth-profile-save-{}", Uuid::new_v4()));
-    request_handle
-        .request_typed(ClientRequest::AuthProfileSave {
-            request_id,
-            params: codex_app_server_protocol::AuthProfileSaveParams { name, overwrite },
-        })
-        .await
-        .wrap_err("account/authProfile/save failed in TUI")
-}
-
-pub(super) async fn activate_auth_profile(
-    request_handle: AppServerRequestHandle,
-    name: String,
-) -> Result<codex_app_server_protocol::AuthProfileActivateResponse> {
-    let request_id = RequestId::String(format!("auth-profile-activate-{}", Uuid::new_v4()));
-    request_handle
-        .request_typed(ClientRequest::AuthProfileActivate {
-            request_id,
-            params: codex_app_server_protocol::AuthProfileActivateParams { name },
-        })
-        .await
-        .wrap_err("account/authProfile/activate failed in TUI")
-}
-
 pub(super) async fn activate_next_auth_profile(
     request_handle: AppServerRequestHandle,
 ) -> Result<codex_app_server_protocol::AuthProfileActivateNextResponse> {
@@ -1077,20 +986,6 @@ pub(super) async fn activate_next_auth_profile(
         })
         .await
         .wrap_err("account/authProfile/activateNext failed in TUI")
-}
-
-pub(super) async fn delete_auth_profile(
-    request_handle: AppServerRequestHandle,
-    name: String,
-) -> Result<codex_app_server_protocol::AuthProfileDeleteResponse> {
-    let request_id = RequestId::String(format!("auth-profile-delete-{}", Uuid::new_v4()));
-    request_handle
-        .request_typed(ClientRequest::AuthProfileDelete {
-            request_id,
-            params: codex_app_server_protocol::AuthProfileDeleteParams { name },
-        })
-        .await
-        .wrap_err("account/authProfile/delete failed in TUI")
 }
 
 pub(super) async fn read_account_priming_status(

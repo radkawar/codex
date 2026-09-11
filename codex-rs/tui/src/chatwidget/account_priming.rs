@@ -14,14 +14,12 @@ use unicode_width::UnicodeWidthStr;
 
 use super::ChatWidget;
 
-const PROFILE_COLUMN_MAX_WIDTH: usize = 18;
 const ACCOUNT_COLUMN_MAX_WIDTH: usize = 30;
 const RESULT_COLUMN_MAX_WIDTH: usize = 14;
 const RESET_COLUMN_WIDTH: usize = 16;
 const DETAIL_COLUMN_MAX_WIDTH: usize = 40;
 
 struct AccountPrimingRow {
-    profile: String,
     account: String,
     result: String,
     five_hour_reset: String,
@@ -54,7 +52,7 @@ pub(super) fn format_account_priming_status_output(status: &AccountPrimingStatus
         .unwrap_or_else(|| "none".to_string());
 
     let mut output = format!(
-        "Account priming\nSTATE: {state}\nINTERVAL: {interval}\nSTARTED: {started}\nCURRENT RUN: {current_run}\nCURRENT PROFILE: {current_profile}\nLAST RUN: {last_run}"
+        "Account priming\nSTATE: {state}\nINTERVAL: {interval}\nSTARTED: {started}\nCURRENT RUN: {current_run}\nCURRENT ACCOUNT: {current_profile}\nLAST RUN: {last_run}"
     );
     if let Some(last_run) = status.last_run.as_ref() {
         output.push_str("\n\n");
@@ -71,11 +69,6 @@ pub(super) fn format_account_priming_run_output(summary: &AccountPrimingRunSumma
         .map(|result| account_priming_row(result, captured_at))
         .collect::<Vec<_>>();
 
-    let profile_width = column_width(
-        "PROFILE",
-        rows.iter().map(|row| row.profile.as_str()),
-        PROFILE_COLUMN_MAX_WIDTH,
-    );
     let account_width = column_width(
         "ACCOUNT",
         rows.iter().map(|row| row.account.as_str()),
@@ -103,7 +96,6 @@ pub(super) fn format_account_priming_run_output(summary: &AccountPrimingRunSumma
     );
 
     let header = join_table_cells([
-        pad_table_cell("PROFILE", profile_width),
         pad_table_cell("ACCOUNT", account_width),
         pad_table_cell("RESULT", result_width),
         pad_table_cell("5H RESET", five_hour_reset_width),
@@ -111,7 +103,6 @@ pub(super) fn format_account_priming_run_output(summary: &AccountPrimingRunSumma
         pad_table_cell("DETAIL", detail_width),
     ]);
     let divider = join_table_cells([
-        "-".repeat(profile_width),
         "-".repeat(account_width),
         "-".repeat(result_width),
         "-".repeat(five_hour_reset_width),
@@ -122,7 +113,6 @@ pub(super) fn format_account_priming_run_output(summary: &AccountPrimingRunSumma
         .iter()
         .map(|row| {
             join_table_cells([
-                pad_table_cell(&row.profile, profile_width),
                 pad_table_cell(&row.account, account_width),
                 pad_table_cell(&row.result, result_width),
                 pad_table_cell(&row.five_hour_reset, five_hour_reset_width),
@@ -171,10 +161,10 @@ fn account_priming_row(
     let account = match &result.account {
         Some(Account::ApiKey {}) => "API key".to_string(),
         Some(Account::Chatgpt { email, .. }) => {
-            email.clone().unwrap_or_else(|| "unknown".to_string())
+            email.clone().unwrap_or_else(|| result.profile_name.clone())
         }
         Some(Account::AmazonBedrock { .. }) => "Amazon Bedrock".to_string(),
-        None => "-".to_string(),
+        None => result.profile_name.clone(),
     };
     let snapshot = result
         .after_rate_limits
@@ -182,7 +172,6 @@ fn account_priming_row(
         .or(result.before_rate_limits.as_ref());
 
     AccountPrimingRow {
-        profile: result.profile_name.clone(),
         account,
         result: outcome_label(result.outcome).to_string(),
         five_hour_reset: format_window_reset(

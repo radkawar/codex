@@ -1373,28 +1373,6 @@ async fn usage_error_slash_command_is_available_from_local_recall() {
 }
 
 #[tokio::test]
-async fn account_commands_emit_profile_events() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    submit_composer_text(&mut chat, "/accounts");
-    assert_matches!(rx.try_recv(), Ok(AppEvent::ListAccountSessions));
-    assert_matches!(rx.try_recv(), Ok(AppEvent::ListAuthProfiles));
-
-    submit_composer_text(&mut chat, "/account save work --overwrite");
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::SaveAuthProfile { name, overwrite })
-            if name == "work" && overwrite
-    );
-
-    submit_composer_text(&mut chat, "/account switch work");
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::ActivateAuthProfile { name }) if name == "work"
-    );
-}
-
-#[tokio::test]
 async fn prime_command_parses_interval_and_workflows_stays_session_local() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
@@ -1407,35 +1385,6 @@ async fn prime_command_parses_interval_and_workflows_stays_session_local() {
 
     submit_composer_text(&mut chat, "/workflows");
     assert_matches!(rx.try_recv(), Ok(AppEvent::OpenAgentPicker));
-}
-
-#[tokio::test]
-async fn auth_profiles_output_has_stable_snapshot() {
-    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
-
-    chat.add_auth_profiles_output(Ok(codex_app_server_protocol::AuthProfileListResponse {
-        profiles: vec![
-            codex_app_server_protocol::AuthProfileSummary {
-                name: "work".to_string(),
-                account: Some(codex_app_server_protocol::Account::Chatgpt {
-                    email: Some("user@example.com".to_string()),
-                    plan_type: codex_protocol::account::PlanType::Pro,
-                }),
-                rate_limits: None,
-                active: true,
-            },
-            codex_app_server_protocol::AuthProfileSummary {
-                name: "api".to_string(),
-                account: Some(codex_app_server_protocol::Account::ApiKey {}),
-                rate_limits: None,
-                active: false,
-            },
-        ],
-    }));
-
-    let cells = drain_insert_history(&mut rx);
-    let rendered = lines_to_single_string(cells.last().expect("auth profiles output"));
-    assert_chatwidget_snapshot!("auth_profiles_output", rendered);
 }
 
 #[tokio::test]
@@ -2063,33 +2012,98 @@ async fn queued_device_login_runs_after_the_active_turn() {
 }
 
 #[tokio::test]
-async fn account_commands_request_list_switch_and_session_logout() {
+async fn account_commands_request_one_list_and_switch_by_email_or_id() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
 
-    chat.dispatch_command(SlashCommand::Account);
-    assert_matches!(rx.try_recv(), Ok(AppEvent::ListAccountSessions));
-    assert_matches!(rx.try_recv(), Ok(AppEvent::ListAuthProfiles));
+    for command in ["/account", "/account list"] {
+        submit_composer_text(&mut chat, command);
+        assert_matches!(rx.try_recv(), Ok(AppEvent::ListAccountSessions));
+        assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+    }
 
-    chat.dispatch_command_with_args(
-        SlashCommand::Account,
-        "session switch session-1 workspace-1".to_string(),
-        Vec::new(),
-    );
+    for (command, expected_id, expected_workspace) in [
+        ("/account switch user@example.com", "user@example.com", None),
+        (
+            "/account switch account-1 workspace-1",
+            "account-1",
+            Some("workspace-1"),
+        ),
+        ("/account session switch account-2", "account-2", None),
+    ] {
+        submit_composer_text(&mut chat, command);
+        assert_matches!(
+            rx.try_recv(),
+            Ok(AppEvent::SwitchAccountSession { session_id, account_id })
+                if (session_id.as_str(), account_id.as_deref()) == (expected_id, expected_workspace)
+        );
+        assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+    }
+}
+
+#[tokio::test]
+async fn account_logout_and_delete_use_canonical_account_requests() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    for (command, expected_id) in [
+        ("/account logout user@example.com", "user@example.com"),
+        ("/account delete account-1", "account-1"),
+        ("/account session logout account-2", "account-2"),
+    ] {
+        submit_composer_text(&mut chat, command);
+        assert_matches!(
+            rx.try_recv(),
+            Ok(AppEvent::LogoutAccountSession { session_id }) if session_id == expected_id
+        );
+        assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
+    }
+}
+
+#[tokio::test]
+async fn account_next_and_autoswitch_controls_remain_available() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    submit_composer_text(&mut chat, "/account next");
     assert_matches!(
         rx.try_recv(),
-        Ok(AppEvent::SwitchAccountSession { session_id, account_id })
-            if session_id == "session-1" && account_id.as_deref() == Some("workspace-1")
+        Ok(AppEvent::ActivateNextAuthProfile {
+            trigger: AuthProfileSwitchTrigger::ManualNext
+        })
     );
+    submit_composer_text(&mut chat, "/account autoswitch off");
+    assert!(!chat.auto_switch_auth_profile_on_rate_limit);
+    submit_composer_text(&mut chat, "/account autoswitch on");
+    assert!(chat.auto_switch_auth_profile_on_rate_limit);
+    submit_composer_text(&mut chat, "/account autoswitch status");
 
-    chat.dispatch_command_with_args(
-        SlashCommand::Account,
-        "session logout session-1".to_string(),
-        Vec::new(),
-    );
-    assert_matches!(
-        rx.try_recv(),
-        Ok(AppEvent::LogoutAccountSession { session_id }) if session_id == "session-1"
-    );
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_chatwidget_snapshot!("account_autoswitch_controls", rendered);
+}
+
+#[tokio::test]
+async fn account_command_invalid_arguments_show_usage() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    for args in [
+        "switch",
+        "switch user@example.com workspace-1 extra",
+        "logout",
+        "logout account-1 extra",
+        "list extra",
+    ] {
+        chat.dispatch_command_with_args(SlashCommand::Account, args.to_string(), Vec::new());
+    }
+    let cells = drain_insert_history(&mut rx);
+    let rendered = cells
+        .iter()
+        .map(|cell| lines_to_single_string(cell))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert_chatwidget_snapshot!("account_command_usage", rendered);
 }
 
 #[tokio::test]
@@ -2098,7 +2112,7 @@ async fn queued_account_switch_runs_after_the_active_turn() {
     chat.thread_id = Some(ThreadId::new());
     handle_turn_started(&mut chat, "turn-1");
 
-    queue_composer_text_with_tab(&mut chat, "/account session switch session-1");
+    queue_composer_text_with_tab(&mut chat, "/account switch user@example.com");
     assert_matches!(rx.try_recv(), Err(TryRecvError::Empty));
 
     complete_turn_with_message(&mut chat, "turn-1", Some("done"));
@@ -2109,7 +2123,7 @@ async fn queued_account_switch_runs_after_the_active_turn() {
             AppEvent::SwitchAccountSession {
                 session_id,
                 account_id: None,
-            } if session_id == "session-1"
+            } if session_id == "user@example.com"
         ))
     );
 }

@@ -51,7 +51,6 @@ pub enum SlashCommand {
     Diff,
     Mention,
     Status,
-    Accounts,
     Account,
     Prime,
     Loop,
@@ -117,8 +116,7 @@ impl SlashCommand {
             SlashCommand::Import => "import setup, this project, and recent chats from Claude Code",
             SlashCommand::Hooks => "view and manage lifecycle hooks",
             SlashCommand::Status => "show current session configuration and token usage",
-            SlashCommand::Accounts => "list saved accounts and auth profiles",
-            SlashCommand::Account => "list, switch, or remove saved accounts and auth profiles",
+            SlashCommand::Account => "list, switch, or log out saved accounts",
             SlashCommand::Prime => "manage the background account-priming worker",
             SlashCommand::Loop => {
                 "configure an automatic follow-up after successful turn completion"
@@ -261,7 +259,6 @@ impl SlashCommand {
             | SlashCommand::Skills
             | SlashCommand::Hooks
             | SlashCommand::Status
-            | SlashCommand::Accounts
             | SlashCommand::Loop
             | SlashCommand::Workflows
             | SlashCommand::Pwd
