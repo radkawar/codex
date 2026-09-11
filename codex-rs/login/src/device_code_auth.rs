@@ -182,42 +182,59 @@ pub async fn complete_device_code_login(
     opts: ServerOptions,
     device_code: DeviceCode,
 ) -> std::io::Result<()> {
+    complete_device_code_login_with_cancel(opts, device_code, std::future::pending()).await
+}
+
+/// Cancels authorization while waiting for the server, but always finishes an
+/// already-started credential write before returning to its storage owner.
+pub async fn complete_device_code_login_with_cancel(
+    opts: ServerOptions,
+    device_code: DeviceCode,
+    cancelled: impl std::future::Future<Output = ()> + Send,
+) -> std::io::Result<()> {
     let base_url = opts.issuer.trim_end_matches('/');
     let client = create_raw_auth_client(base_url, &opts.auth_route_config)?;
     let api_base_url = format!("{base_url}/api/accounts");
 
-    let code_resp = poll_for_token(
-        &client,
-        &api_base_url,
-        &device_code.device_auth_id,
-        &device_code.user_code,
-        device_code.interval,
-    )
-    .await?;
+    let authorization = async {
+        let code_resp = poll_for_token(
+            &client,
+            &api_base_url,
+            &device_code.device_auth_id,
+            &device_code.user_code,
+            device_code.interval,
+        )
+        .await?;
 
-    let pkce = PkceCodes {
-        code_verifier: code_resp.code_verifier,
-        code_challenge: code_resp.code_challenge,
+        let pkce = PkceCodes {
+            code_verifier: code_resp.code_verifier,
+            code_challenge: code_resp.code_challenge,
+        };
+        let redirect_uri = format!("{base_url}/deviceauth/callback");
+
+        let tokens = crate::server::exchange_code_for_tokens(
+            base_url,
+            &opts.client_id,
+            &redirect_uri,
+            &pkce,
+            &code_resp.authorization_code,
+            &opts.auth_route_config,
+        )
+        .await
+        .map_err(|err| std::io::Error::other(format!("device code exchange failed: {err}")))?;
+
+        if let Err(message) = crate::server::ensure_workspace_allowed(
+            opts.forced_chatgpt_workspace_id.as_deref(),
+            &tokens.id_token,
+        ) {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, message));
+        }
+        Ok::<_, io::Error>(tokens)
     };
-    let redirect_uri = format!("{base_url}/deviceauth/callback");
-
-    let tokens = crate::server::exchange_code_for_tokens(
-        base_url,
-        &opts.client_id,
-        &redirect_uri,
-        &pkce,
-        &code_resp.authorization_code,
-        &opts.auth_route_config,
-    )
-    .await
-    .map_err(|err| std::io::Error::other(format!("device code exchange failed: {err}")))?;
-
-    if let Err(message) = crate::server::ensure_workspace_allowed(
-        opts.forced_chatgpt_workspace_id.as_deref(),
-        &tokens.id_token,
-    ) {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, message));
-    }
+    let tokens = tokio::select! {
+        _ = cancelled => return Err(io::Error::other("Login was not completed")),
+        result = authorization => result?,
+    };
 
     crate::server::persist_tokens_async(
         &opts.codex_home,

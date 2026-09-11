@@ -7,7 +7,10 @@ use codex_config::types::AuthCredentialsStoreMode;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::ServerOptions;
 use codex_login::auth::load_auth_dot_json;
+use codex_login::complete_device_code_login_with_cancel;
+use codex_login::request_device_code;
 use codex_login::run_device_code_login;
+use pretty_assertions::assert_eq;
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -163,6 +166,55 @@ async fn device_code_login_integration_succeeds() -> anyhow::Result<()> {
     assert_eq!(tokens.refresh_token, "refresh-token-123");
     assert_eq!(tokens.id_token.raw_jwt, jwt);
     assert_eq!(tokens.account_id.as_deref(), Some(WORKSPACE_ID_ALLOWED));
+    Ok(())
+}
+
+#[tokio::test]
+async fn device_code_cancellation_during_token_exchange_does_not_save_credentials()
+-> anyhow::Result<()> {
+    let codex_home = tempdir()?;
+    let server = MockServer::start().await;
+    mock_usercode_success(&server).await;
+    mock_poll_token_single(
+        &server,
+        "/api/accounts/deviceauth/token",
+        ResponseTemplate::new(200).set_body_json(json!({
+            "authorization_code": "code", "code_challenge": "challenge", "code_verifier": "verifier"
+        })),
+    )
+    .await;
+    let exchange_started = Arc::new(tokio::sync::Notify::new());
+    let notify = Arc::clone(&exchange_started);
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(move |_: &Request| {
+            notify.notify_one();
+            ResponseTemplate::new(200)
+                .set_delay(std::time::Duration::from_secs(/*secs*/ 1))
+                .set_body_json(json!({
+                    "id_token": make_jwt(json!({ "https://api.openai.com/auth": {
+                        "chatgpt_account_id": WORKSPACE_ID_ALLOWED
+                    } })),
+                    "access_token": "access", "refresh_token": "refresh"
+                }))
+        })
+        .expect(1)
+        .mount(&server)
+        .await;
+    let options = server_opts(&codex_home, server.uri(), AuthCredentialsStoreMode::File);
+    let code = request_device_code(&options).await?;
+    let error = complete_device_code_login_with_cancel(options, code, exchange_started.notified())
+        .await
+        .expect_err("authorization should be canceled");
+    assert_eq!(error.to_string(), "Login was not completed");
+    assert_eq!(
+        load_auth_dot_json(
+            codex_home.path(),
+            AuthCredentialsStoreMode::File,
+            AuthKeyringBackendKind::default(),
+        )?,
+        None
+    );
     Ok(())
 }
 
