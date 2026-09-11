@@ -872,7 +872,7 @@ fn register_code_mode_executors(
                 }
                 deferred_exec_prompt_tool_specs.push(Arc::clone(&spec));
             }
-        } else if exposure != ToolExposure::CodeModeOnly {
+        } else if exposure != ToolExposure::CodeModeOnly || !workflow_runtime_tool {
             exec_prompt_tool_specs.push(spec.as_ref().clone());
         }
         code_mode_nested_tool_specs.push((spec, cached_runtime));
@@ -905,6 +905,7 @@ fn register_code_mode_executors(
             },
         ),
         code_mode_nested_tool_specs,
+        super::code_mode::CodeModeNotificationOutput::CustomTool,
     );
 
     registry.prepend_trusted(Arc::new(CodeModeWaitHandler));

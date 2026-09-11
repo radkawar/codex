@@ -584,6 +584,7 @@ mod tests {
         RateLimitSnapshot {
             limit_id: Some("codex".to_string()),
             limit_name: None,
+            normal_model_slug: None,
             primary: primary.then_some(codex_protocol::protocol::RateLimitWindow {
                 used_percent: 25.0,
                 window_minutes: Some(300),

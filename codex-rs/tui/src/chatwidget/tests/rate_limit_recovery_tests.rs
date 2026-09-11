@@ -5,6 +5,7 @@ use pretty_assertions::assert_eq;
 async fn rate_limit_recovery_holds_submissions_until_model_change() {
     let (mut chat, mut events, mut ops) = make_chatwidget_manual(Some("test-model-a")).await;
     set_chatgpt_auth(&mut chat);
+    chat.set_auto_switch_auth_profile_on_rate_limit(/*enabled*/ false);
     chat.thread_id = Some(ThreadId::new());
     handle_turn_started(&mut chat, "failed-turn");
     chat.queue_user_message(UserMessage::from("queued follow-up"));

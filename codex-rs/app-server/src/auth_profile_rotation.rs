@@ -134,6 +134,7 @@ mod tests {
             rate_limits: Some(RateLimitSnapshot {
                 limit_id: Some("codex".to_string()),
                 limit_name: None,
+                normal_model_slug: None,
                 plan_type: Some(PlanType::Pro),
                 primary: primary_used_percent.map(|used_percent| {
                     codex_app_server_protocol::RateLimitWindow {
@@ -193,6 +194,7 @@ mod tests {
         unknown.rate_limits = Some(codex_app_server_protocol::RateLimitSnapshot {
             limit_id: Some("codex".to_string()),
             limit_name: None,
+            normal_model_slug: None,
             plan_type: Some(PlanType::Pro),
             primary: None,
             secondary: None,

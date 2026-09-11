@@ -154,9 +154,11 @@ pub(crate) fn account_from_auth(auth: &AuthDotJson) -> Option<Account> {
                 plan_type: record.plan_type,
             })
         }
-        CoreAuthMode::BedrockApiKey => Some(Account::AmazonBedrock {
-            uses_codex_managed_credentials: true,
-        }),
+        CoreAuthMode::BedrockApiKey | CoreAuthMode::BedrockAccessKeys => {
+            Some(Account::AmazonBedrock {
+                uses_codex_managed_credentials: true,
+            })
+        }
         CoreAuthMode::Headers => None,
     }
 }
@@ -170,6 +172,7 @@ pub(crate) fn auth_mode_from_auth(auth: &AuthDotJson) -> AuthMode {
         CoreAuthMode::AgentIdentity => AuthMode::AgentIdentity,
         CoreAuthMode::PersonalAccessToken => AuthMode::PersonalAccessToken,
         CoreAuthMode::BedrockApiKey => AuthMode::BedrockApiKey,
+        CoreAuthMode::BedrockAccessKeys => AuthMode::BedrockAccessKeys,
     }
 }
 
@@ -187,6 +190,9 @@ fn auth_profile_matches_current(current: &AuthDotJson, candidate: &AuthDotJson) 
         }
         (CoreAuthMode::BedrockApiKey, CoreAuthMode::BedrockApiKey) => {
             current.bedrock_api_key == candidate.bedrock_api_key
+        }
+        (CoreAuthMode::BedrockAccessKeys, CoreAuthMode::BedrockAccessKeys) => {
+            current.bedrock_access_keys == candidate.bedrock_access_keys
         }
         (CoreAuthMode::PersonalAccessToken, CoreAuthMode::PersonalAccessToken) => {
             current.personal_access_token == candidate.personal_access_token
@@ -223,6 +229,9 @@ fn resolved_auth_mode(auth: &AuthDotJson) -> CoreAuthMode {
     if auth.bedrock_api_key.is_some() {
         return CoreAuthMode::BedrockApiKey;
     }
+    if auth.bedrock_access_keys.is_some() {
+        return CoreAuthMode::BedrockAccessKeys;
+    }
     if auth.openai_api_key.is_some() {
         return CoreAuthMode::ApiKey;
     }
@@ -254,7 +263,9 @@ mod tests {
     use super::*;
     use base64::Engine;
     use codex_login::TokenData;
+    use codex_login::auth::BedrockAccessKeysAuth;
     use codex_login::token_data::parse_chatgpt_jwt_claims;
+    use pretty_assertions::assert_eq;
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -288,7 +299,54 @@ mod tests {
             agent_identity: None,
             personal_access_token: None,
             bedrock_api_key: None,
+            bedrock_access_keys: None,
         }
+    }
+
+    #[test]
+    fn bedrock_access_key_profiles_preserve_account_and_active_identity() {
+        let dir = tempdir().expect("tempdir");
+        let mut auth = chatgpt_auth("acct-1", "user@example.com");
+        auth.auth_mode = None;
+        auth.tokens = None;
+        auth.bedrock_access_keys = Some(BedrockAccessKeysAuth {
+            access_key_id: "access-key-id".to_string(),
+            secret_access_key: "secret-access-key".to_string(),
+            session_token: Some("session-token".to_string()),
+        });
+
+        save_auth_profile(
+            dir.path(),
+            "bedrock",
+            &auth,
+            /*overwrite*/ false,
+            Some(&auth),
+        )
+        .expect("profile should save");
+
+        let expected = AuthProfileSummary {
+            name: "bedrock".to_string(),
+            account: Some(Account::AmazonBedrock {
+                uses_codex_managed_credentials: true,
+            }),
+            rate_limits: None,
+            active: true,
+        };
+        assert_eq!(auth_mode_from_auth(&auth), AuthMode::BedrockAccessKeys);
+        assert_eq!(
+            list_auth_profiles(dir.path(), Some(&auth)).expect("profiles should list"),
+            vec![expected.clone()]
+        );
+
+        auth.bedrock_access_keys.as_mut().unwrap().access_key_id =
+            "another-access-key-id".to_string();
+        assert_eq!(
+            list_auth_profiles(dir.path(), Some(&auth)).expect("profiles should list"),
+            vec![AuthProfileSummary {
+                active: false,
+                ..expected
+            }]
+        );
     }
 
     #[test]

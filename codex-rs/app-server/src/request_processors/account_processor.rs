@@ -2103,7 +2103,10 @@ impl AccountRequestProcessor {
         if auth.is_api_key_auth() {
             return Some(Account::ApiKey {});
         }
-        if matches!(auth, CodexAuth::BedrockApiKey(_)) {
+        if matches!(
+            auth,
+            CodexAuth::BedrockApiKey(_) | CodexAuth::BedrockAccessKeys(_)
+        ) {
             return Some(Account::AmazonBedrock {
                 uses_codex_managed_credentials: true,
             });

@@ -22,13 +22,19 @@ pub(crate) type CodeModeNestedTool = (Arc<ToolSpec>, Option<Arc<dyn CoreToolRunt
 pub struct CodeModeExecuteHandler {
     spec: ToolSpec,
     nested_tool_specs: Vec<CodeModeNestedTool>,
+    notification_output: CodeModeNotificationOutput,
 }
 
 impl CodeModeExecuteHandler {
-    pub(crate) fn new(spec: ToolSpec, nested_tool_specs: Vec<CodeModeNestedTool>) -> Self {
+    pub(crate) fn new(
+        spec: ToolSpec,
+        nested_tool_specs: Vec<CodeModeNestedTool>,
+        notification_output: CodeModeNotificationOutput,
+    ) -> Self {
         Self {
             spec,
             nested_tool_specs,
+            notification_output,
         }
     }
 
@@ -39,7 +45,6 @@ impl CodeModeExecuteHandler {
         call_id: String,
         originating_item_id: Option<codex_protocol::ResponseItemId>,
         code: String,
-        notification_output: CodeModeNotificationOutput,
         telemetry: &mut CodeModeToolCallGuard,
     ) -> Result<FunctionToolOutput, FunctionCallError> {
         let args =
@@ -87,7 +92,7 @@ impl CodeModeExecuteHandler {
         exec.session
             .services
             .code_mode_service
-            .set_cell_notification_output(&cell_id, notification_output);
+            .set_cell_notification_output(&cell_id, self.notification_output);
         telemetry.cell_id = Some(cell_id.to_string());
         exec.session
             .services
@@ -225,7 +230,6 @@ impl CodeModeExecuteHandler {
                     call_id,
                     originating_item_id,
                     input,
-                    CodeModeNotificationOutput::CustomTool,
                     &mut telemetry,
                 )
                 .await

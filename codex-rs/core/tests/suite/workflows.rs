@@ -47,7 +47,7 @@ async fn workflow_tool_persists_script_and_returns_background_task_immediately()
                     .expect("workflow dependency should be enabled");
             }
         });
-    let test = builder.build(&server).await?;
+    let test = builder.build_with_auto_env(&server).await?;
     let script = r#"export const meta = {
   name: 'background-check',
   description: 'Exercise the workflow runtime',

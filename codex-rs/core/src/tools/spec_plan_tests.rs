@@ -1380,17 +1380,29 @@ async fn sleep_tool_stays_direct_and_outside_code_mode() {
 
 #[tokio::test]
 async fn workflows_expose_one_public_tool_and_keep_runtime_hooks_internal() {
-    let plan = probe(|turn| {
-        set_features(
-            turn,
-            &[
-                Feature::CodeMode,
-                Feature::Collab,
-                Feature::MultiAgentV2,
-                Feature::Workflows,
-            ],
-        );
-    })
+    let plan = probe_with(
+        |turn| {
+            set_features(
+                turn,
+                &[
+                    Feature::CodeMode,
+                    Feature::CodeModeOnly,
+                    Feature::Collab,
+                    Feature::MultiAgentV2,
+                    Feature::Workflows,
+                ],
+            );
+        },
+        ToolPlanInputs {
+            tool_runtimes: vec![mcp_runtime(
+                "nested",
+                "mcp__nested",
+                "lookup",
+                ToolExposure::CodeModeOnly,
+            )],
+            ..ToolPlanInputs::default()
+        },
+    )
     .await;
 
     plan.assert_visible_contains(&["workflow"]);
@@ -1402,6 +1414,13 @@ async fn workflows_expose_one_public_tool_and_keep_runtime_hooks_internal() {
         ToolExposure::CodeModeOnly
     );
     assert_eq!(plan.exposure("workflow_load"), ToolExposure::CodeModeOnly);
+
+    let ToolSpec::Freeform(exec) = plan.visible_spec(codex_code_mode::PUBLIC_TOOL_NAME) else {
+        panic!("expected code mode exec tool");
+    };
+    assert!(exec.description.contains("mcp__nested__lookup"));
+    assert!(!exec.description.contains("workflow_journal_append"));
+    assert!(!exec.description.contains("workflow_load"));
 }
 
 #[tokio::test]

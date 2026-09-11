@@ -61,7 +61,7 @@ async fn slash_new_and_fork_offer_checkout_choices_inside_local_git_repository()
         chat.set_feature_enabled(Feature::Worktrees, /*enabled*/ true);
         chat.set_local_worktree_operations(available);
         chat.bottom_pane
-            .set_composer_text("/work".into(), Vec::new(), Vec::new());
+            .set_composer_text("/workt".into(), Vec::new(), Vec::new());
         let popup = normalize_snapshot_paths(render_bottom_popup(&chat, /*width*/ 80));
         assert_chatwidget_snapshot!(snapshot, popup);
         assert_eq!(popup.contains("/worktree"), available);

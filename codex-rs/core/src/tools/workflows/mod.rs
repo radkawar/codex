@@ -38,7 +38,11 @@ impl WorkflowHandler {
     pub(crate) fn new(nested_tool_specs: Vec<CodeModeNestedTool>) -> Self {
         let spec = spec::create_workflow_tool();
         Self {
-            execute_handler: CodeModeExecuteHandler::new(spec.clone(), nested_tool_specs),
+            execute_handler: CodeModeExecuteHandler::new(
+                spec.clone(),
+                nested_tool_specs,
+                CodeModeNotificationOutput::FunctionTool,
+            ),
             spec,
         }
     }
@@ -55,13 +59,28 @@ impl WorkflowHandler {
             )
     }
 
+    #[tracing::instrument(
+        name = "code_mode.handler.workflow",
+        level = "info",
+        skip_all,
+        fields(
+            conversation.id = %invocation.session.thread_id,
+            turn_id = invocation.turn.sub_id.as_str(),
+            call_id = invocation.call_id.as_str(),
+            cell.id = tracing::field::Empty,
+            outcome = "interrupted",
+        )
+    )]
     async fn handle_call(
         &self,
         invocation: ToolInvocation,
     ) -> Result<Box<dyn ToolOutput>, FunctionCallError> {
+        let handler_span = tracing::Span::current();
+        let originating_item_id = invocation.originating_item_id().await;
         let ToolInvocation {
             session,
             turn,
+            step_context,
             call_id,
             payload,
             ..
@@ -129,17 +148,19 @@ impl WorkflowHandler {
             session.services.analytics_events_client.clone(),
             session.thread_id.to_string(),
             turn.sub_id.clone(),
+            turn.turn_metadata_state.clone(),
             call_id.clone(),
             PUBLIC_TOOL_NAME,
+            handler_span,
         );
         let result = self
             .execute_handler
             .execute(
                 session,
-                turn,
+                step_context,
                 call_id,
+                originating_item_id,
                 runtime_source,
-                CodeModeNotificationOutput::FunctionTool,
                 &mut telemetry,
             )
             .await
@@ -166,7 +187,10 @@ impl ToolExecutor<ToolInvocation> for WorkflowHandler {
         ToolExposure::DirectModelOnly
     }
 
-    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
+    where
+        ToolInvocation: 'a,
+    {
         Box::pin(self.handle_call(invocation))
     }
 }
@@ -202,7 +226,10 @@ impl ToolExecutor<ToolInvocation> for JournalHandler {
         ToolExposure::CodeModeOnly
     }
 
-    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
+    where
+        ToolInvocation: 'a,
+    {
         Box::pin(async move {
             let arguments = function_arguments(invocation.payload.clone())?;
             let record: JournalAppendArgs = serde_json::from_str(&arguments).map_err(|err| {
@@ -261,7 +288,10 @@ impl ToolExecutor<ToolInvocation> for LoadHandler {
         ToolExposure::CodeModeOnly
     }
 
-    fn handle(&self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'_> {
+    fn handle<'a>(&'a self, invocation: ToolInvocation) -> codex_tools::ToolExecutorFuture<'a>
+    where
+        ToolInvocation: 'a,
+    {
         Box::pin(async move {
             let arguments = function_arguments(invocation.payload.clone())?;
             let args: LoadArgs = serde_json::from_str(&arguments).map_err(|err| {

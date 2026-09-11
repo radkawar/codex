@@ -208,9 +208,11 @@ async fn assert_account_updated(
     )
     .await??;
     let current_account = match auth_mode {
-        Some(AuthMode::BedrockApiKey) => Some(Account::AmazonBedrock {
-            uses_codex_managed_credentials: true,
-        }),
+        Some(AuthMode::BedrockApiKey | AuthMode::BedrockAccessKeys) => {
+            Some(Account::AmazonBedrock {
+                uses_codex_managed_credentials: true,
+            })
+        }
         Some(AuthMode::ApiKey) => Some(Account::ApiKey {}),
         Some(
             AuthMode::Chatgpt

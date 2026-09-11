@@ -371,6 +371,7 @@ async fn backend_banner_account_changes_invalidate_pending_recovery() -> Result<
         codex_app_server_client::AppServerEvent::ServerNotification(Box::new(
             ServerNotification::AccountUpdated(
                 codex_app_server_protocol::AccountUpdatedNotification {
+                    current_account: None,
                     auth_mode: None,
                     plan_type: None,
                 },

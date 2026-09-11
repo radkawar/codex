@@ -72,6 +72,7 @@ async fn cyber_refusal_reads_eligibility_without_changing_the_model() -> Result<
             &server,
             AppServerEvent::ServerNotification(Box::new(ServerNotification::AccountUpdated(
                 AccountUpdatedNotification {
+                    current_account: None,
                     auth_mode: Some(AuthMode::Chatgpt),
                     plan_type: None,
                 },
