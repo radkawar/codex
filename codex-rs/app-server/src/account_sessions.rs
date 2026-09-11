@@ -31,6 +31,13 @@ pub(crate) struct AccountSessionsStore<'a> {
     config: &'a Config,
     auth_manager: &'a Arc<AuthManager>,
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AccountSessionActivation {
+    Activate,
+    PreserveCurrent,
+    RestorePrevious,
+}
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct StoredAccountSessions {
@@ -86,7 +93,6 @@ impl<'a> AccountSessionsStore<'a> {
         &self,
         switch_to_added_account: bool,
     ) -> std::io::Result<AccountSessionsResponse> {
-        let _lock = self.acquire_lock().await?;
         let auth = self
             .auth_manager
             .auth()
@@ -101,21 +107,41 @@ impl<'a> AccountSessionsStore<'a> {
             .load_active_auth()?
             .filter(Self::is_managed_chatgpt_auth_json)
             .ok_or_else(|| std::io::Error::other("No active ChatGPT auth session to add"))?;
+        let activation = if switch_to_added_account {
+            AccountSessionActivation::Activate
+        } else {
+            AccountSessionActivation::RestorePrevious
+        };
+        self.add_auth(&auth_json, activation).await
+    }
+
+    pub(crate) async fn add_auth(
+        &self,
+        auth_json: &AuthDotJson,
+        activation: AccountSessionActivation,
+    ) -> std::io::Result<AccountSessionsResponse> {
+        if !Self::is_managed_chatgpt_auth_json(auth_json) {
+            return Err(std::io::Error::other(
+                "Only managed ChatGPT credentials can be saved as account sessions",
+            ));
+        }
+        let _lock = self.acquire_lock().await?;
         let mut stored = self.load_unlocked().await?;
-        let mut session = Self::session_from_auth_json(&auth_json)
+        self.sync_active_auth_unlocked(&mut stored)?;
+        let mut session = Self::session_from_auth_json(auth_json)
             .ok_or_else(|| std::io::Error::other("No active ChatGPT auth session to add"))?;
 
         let existing_index = stored
             .sessions
             .iter()
-            .position(|saved| Self::same_identity(saved, &auth_json));
+            .position(|saved| Self::same_identity(saved, auth_json));
         if let Some(index) = existing_index {
             session
                 .session_id
                 .clone_from(&stored.sessions[index].session_id);
         }
         let added_session_id = session.session_id.clone();
-        self.save_session_auth(&added_session_id, &auth_json)?;
+        self.save_session_auth(&added_session_id, auth_json)?;
         self.refresh_workspace_metadata(&mut session).await;
         if let Some(index) = existing_index {
             stored.sessions[index] = session;
@@ -123,9 +149,19 @@ impl<'a> AccountSessionsStore<'a> {
             stored.sessions.push(session);
         }
 
-        if switch_to_added_account || stored.active_session_id.is_none() {
+        let activate_added_account = match activation {
+            AccountSessionActivation::Activate => true,
+            AccountSessionActivation::RestorePrevious => stored.active_session_id.is_none(),
+            AccountSessionActivation::PreserveCurrent => {
+                stored.active_session_id.is_none() && self.auth_manager.auth_cached().is_none()
+            }
+        };
+        if activate_added_account {
+            self.save_session_as_active(&added_session_id)?;
             stored.active_session_id = Some(added_session_id);
-        } else if let Some(active_session_id) = stored.active_session_id.as_deref() {
+        } else if activation == AccountSessionActivation::RestorePrevious
+            && let Some(active_session_id) = stored.active_session_id.as_deref()
+        {
             self.save_session_as_active(active_session_id)?;
         }
 

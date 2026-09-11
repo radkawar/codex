@@ -13,6 +13,7 @@ use chrono::Duration as ChronoDuration;
 use chrono::Utc;
 use codex_app_server_protocol::Account;
 use codex_app_server_protocol::AccountLoginCompletedNotification;
+use codex_app_server_protocol::AccountSessionsResponse;
 use codex_app_server_protocol::AccountUpdatedNotification;
 use codex_app_server_protocol::AuthMode;
 use codex_app_server_protocol::CancelLoginAccountParams;
@@ -45,11 +46,13 @@ use codex_login::AuthDotJson;
 use codex_login::AuthKeyringBackendKind;
 use codex_login::CLIENT_ID_OVERRIDE_ENV_VAR;
 use codex_login::REFRESH_TOKEN_URL_OVERRIDE_ENV_VAR;
+use codex_login::TokenData;
 use codex_login::auth::BedrockAccessKeysAuth;
 use codex_login::auth::BedrockApiKeyAuth;
 use codex_login::load_auth_dot_json;
 use codex_login::login_with_api_key;
 use codex_login::login_with_bedrock_api_key;
+use codex_login::token_data::parse_chatgpt_jwt_claims;
 use codex_protocol::account::PlanType as AccountPlanType;
 use codex_protocol::auth::AuthMode as DomainAuthMode;
 use core_test_support::responses;
@@ -57,14 +60,18 @@ use pretty_assertions::assert_eq;
 use serde_json::json;
 use serial_test::serial;
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::Mutex;
 use std::time::Duration;
 use tempfile::TempDir;
 use test_case::test_case;
+use tokio::sync::Notify;
 use tokio::time::timeout;
 use url::Url;
 use wiremock::Mock;
 use wiremock::MockServer;
 use wiremock::ResponseTemplate;
+use wiremock::matchers::header;
 use wiremock::matchers::method;
 use wiremock::matchers::path;
 
@@ -2144,6 +2151,318 @@ async fn login_account_chatgpt_device_code_succeeds_and_notifies() -> Result<()>
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+enum ExistingSessionLoginAuth {
+    Chatgpt,
+    ApiKey,
+}
+
+fn write_existing_session_login_auth(
+    codex_home: &Path,
+    existing: ExistingSessionLoginAuth,
+) -> Result<AccountUpdatedNotification> {
+    match existing {
+        ExistingSessionLoginAuth::Chatgpt => {
+            write_chatgpt_auth(
+                codex_home,
+                ChatGptAuthFixture::new("original-access-token")
+                    .refresh_token("original-refresh-token")
+                    .email("original@example.com")
+                    .plan_type("plus")
+                    .chatgpt_account_id(WORKSPACE_ID_INITIAL)
+                    .account_id(WORKSPACE_ID_INITIAL),
+                AuthCredentialsStoreMode::File,
+            )?;
+            Ok(AccountUpdatedNotification {
+                auth_mode: Some(AuthMode::Chatgpt),
+                plan_type: Some(AccountPlanType::Plus),
+                current_account: Some(Account::Chatgpt {
+                    email: Some("original@example.com".to_string()),
+                    plan_type: AccountPlanType::Plus,
+                }),
+            })
+        }
+        ExistingSessionLoginAuth::ApiKey => {
+            login_with_api_key(
+                codex_home,
+                "sk-original-key",
+                AuthCredentialsStoreMode::File,
+                AuthKeyringBackendKind::default(),
+            )?;
+            Ok(AccountUpdatedNotification {
+                auth_mode: Some(AuthMode::ApiKey),
+                plan_type: None,
+                current_account: Some(Account::ApiKey {}),
+            })
+        }
+    }
+}
+
+#[test_case(ExistingSessionLoginAuth::Chatgpt; "chatgpt")]
+#[test_case(ExistingSessionLoginAuth::ApiKey; "api_key")]
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn account_session_device_login_saves_new_account_without_switching(
+    existing: ExistingSessionLoginAuth,
+) -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mock_server = MockServer::start().await;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            chatgpt_base_url: Some(mock_server.uri()),
+            ..Default::default()
+        },
+    )?;
+    let expected_account = write_existing_session_login_auth(codex_home.path(), existing)?;
+    let original_auth = load_file_auth(codex_home.path())?;
+    write_models_cache(codex_home.path()).await?;
+    mock_device_code_usercode(&mock_server, /*interval_seconds*/ 0).await;
+    mock_device_code_token_success(&mock_server).await;
+    let id_token = encode_id_token(
+        &ChatGptIdTokenClaims::new()
+            .email("device@example.com")
+            .plan_type("pro")
+            .chatgpt_account_id(WORKSPACE_ID_DEVICE),
+    )?;
+    mock_oauth_token(&mock_server, &id_token).await;
+
+    let metadata_arrived = Arc::new(Notify::new());
+    let metadata_request = Arc::clone(&metadata_arrived);
+    let (release_metadata, metadata_release) = std::sync::mpsc::channel();
+    let metadata_release = Mutex::new(metadata_release);
+    Mock::given(method("GET"))
+        .and(path("/api/codex/accounts/check"))
+        .and(header("authorization", "Bearer access-token-123"))
+        .respond_with(move |_request: &wiremock::Request| {
+            metadata_request.notify_one();
+            metadata_release
+                .lock()
+                .expect("metadata response gate")
+                .recv_timeout(DEFAULT_READ_TIMEOUT)
+                .expect("test should release metadata response");
+            ResponseTemplate::new(200).set_body_json(json!({
+                "accounts": [{ "id": WORKSPACE_ID_DEVICE, "structure": "personal" }],
+                "account_ordering": [WORKSPACE_ID_DEVICE],
+                "default_account_id": WORKSPACE_ID_DEVICE,
+            }))
+        })
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    let issuer = mock_server.uri();
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .with_env_overrides(&[
+            ("OPENAI_API_KEY", None),
+            (LOGIN_ISSUER_ENV_VAR, Some(issuer.as_str())),
+        ])
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    let request_id = mcp
+        .send_raw_request(
+            "accountSession/login/start",
+            Some(json!({ "type": "chatgptDeviceCode" })),
+        )
+        .await?;
+    let login: LoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+    let LoginAccountResponse::ChatgptDeviceCode { login_id, .. } = login else {
+        bail!("unexpected login response: {login:?}");
+    };
+    timeout(DEFAULT_READ_TIMEOUT, metadata_arrived.notified()).await?;
+    assert_eq!(load_file_auth(codex_home.path())?, original_auth);
+    let read_id = mcp
+        .send_get_account_request(GetAccountParams {
+            refresh_token: false,
+        })
+        .await?;
+    let account: GetAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(read_id)).await??;
+    assert_eq!(
+        account,
+        GetAccountResponse {
+            account: expected_account.current_account.clone(),
+            requires_openai_auth: true,
+        }
+    );
+
+    let cancel_id = mcp
+        .send_cancel_login_account_request(CancelLoginAccountParams {
+            login_id: login_id.clone(),
+        })
+        .await?;
+    assert!(
+        timeout(
+            Duration::from_millis(100),
+            mcp.read_response::<CancelLoginAccountResponse>(cancel_id),
+        )
+        .await
+        .is_err(),
+        "cancellation must wait until the completing login commits its saved account"
+    );
+    release_metadata.send(())?;
+    let cancel: CancelLoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(cancel_id)).await??;
+    assert_eq!(
+        cancel,
+        CancelLoginAccountResponse {
+            status: CancelLoginAccountStatus::NotFound,
+        }
+    );
+
+    let request_id = mcp
+        .send_raw_request(
+            "accountSession/list",
+            Some(json!({ "refreshWorkspaceMetadata": false })),
+        )
+        .await?;
+    let sessions: AccountSessionsResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+    let mut identities = sessions
+        .sessions
+        .iter()
+        .map(|session| (session.email.as_deref(), session.is_active))
+        .collect::<Vec<_>>();
+    identities.sort_unstable();
+    let expected_identities = match existing {
+        ExistingSessionLoginAuth::Chatgpt => vec![
+            (Some("device@example.com"), false),
+            (Some("original@example.com"), true),
+        ],
+        ExistingSessionLoginAuth::ApiKey => vec![(Some("device@example.com"), false)],
+    };
+    assert_eq!(identities, expected_identities);
+    let added = sessions
+        .sessions
+        .iter()
+        .find(|session| !session.is_active)
+        .expect("added account must be committed before cancellation returns");
+    let saved_auth = load_file_auth(
+        &codex_home
+            .path()
+            .join("account-sessions")
+            .join(&added.session_id),
+    )?
+    .expect("saved credentials");
+    assert_eq!(
+        saved_auth.tokens,
+        Some(TokenData {
+            id_token: parse_chatgpt_jwt_claims(&id_token)?,
+            access_token: "access-token-123".to_string(),
+            refresh_token: "refresh-token-123".to_string(),
+            account_id: Some(WORKSPACE_ID_DEVICE.to_string()),
+        })
+    );
+    let completed: AccountLoginCompletedNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_notification("account/login/completed"),
+    )
+    .await??;
+    assert_eq!(
+        completed,
+        AccountLoginCompletedNotification {
+            login_id: Some(login_id),
+            success: true,
+            error: None,
+            onboarding_entrypoint: None,
+        }
+    );
+    let updated: AccountUpdatedNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_notification("account/updated"),
+    )
+    .await??;
+    assert_eq!(updated, expected_account);
+    assert_eq!(load_file_auth(codex_home.path())?, original_auth);
+    Ok(())
+}
+
+#[test_case(ExistingSessionLoginAuth::Chatgpt; "chatgpt")]
+#[test_case(ExistingSessionLoginAuth::ApiKey; "api_key")]
+#[tokio::test]
+async fn account_session_device_login_cancel_before_authorization_preserves_accounts(
+    existing: ExistingSessionLoginAuth,
+) -> Result<()> {
+    let codex_home = TempDir::new()?;
+    let mock_server = MockServer::start().await;
+    create_config_toml(
+        codex_home.path(),
+        CreateConfigTomlParams {
+            requires_openai_auth: Some(true),
+            chatgpt_base_url: Some(mock_server.uri()),
+            ..Default::default()
+        },
+    )?;
+    write_existing_session_login_auth(codex_home.path(), existing)?;
+    let original_auth = load_file_auth(codex_home.path())?;
+    write_models_cache(codex_home.path()).await?;
+    mock_device_code_usercode(&mock_server, /*interval_seconds*/ 1).await;
+    mock_device_code_token_failure(&mock_server, /*status*/ 404).await;
+    Mock::given(method("POST"))
+        .and(path("/oauth/token"))
+        .respond_with(ResponseTemplate::new(500))
+        .expect(0)
+        .mount(&mock_server)
+        .await;
+
+    let issuer = mock_server.uri();
+    let mut mcp = TestAppServer::builder()
+        .with_codex_home(codex_home.path())
+        .with_env_overrides(&[
+            ("OPENAI_API_KEY", None),
+            (LOGIN_ISSUER_ENV_VAR, Some(issuer.as_str())),
+        ])
+        .build_initialized_with_timeout(DEFAULT_READ_TIMEOUT)
+        .await?;
+    let list_id = mcp
+        .send_raw_request("accountSession/list", Some(json!({})))
+        .await?;
+    let original_sessions: AccountSessionsResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(list_id)).await??;
+    let request_id = mcp
+        .send_raw_request(
+            "accountSession/login/start",
+            Some(json!({ "type": "chatgptDeviceCode" })),
+        )
+        .await?;
+    let login: LoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+    let LoginAccountResponse::ChatgptDeviceCode { login_id, .. } = login else {
+        bail!("unexpected login response: {login:?}");
+    };
+    let cancel_id = mcp
+        .send_cancel_login_account_request(CancelLoginAccountParams {
+            login_id: login_id.clone(),
+        })
+        .await?;
+    let cancel: CancelLoginAccountResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(cancel_id)).await??;
+    assert_eq!(
+        cancel,
+        CancelLoginAccountResponse {
+            status: CancelLoginAccountStatus::Canceled,
+        }
+    );
+    let completed: AccountLoginCompletedNotification = timeout(
+        DEFAULT_READ_TIMEOUT,
+        mcp.read_notification("account/login/completed"),
+    )
+    .await??;
+    assert_eq!(completed.login_id, Some(login_id));
+    assert!(!completed.success);
+    assert!(completed.error.is_some());
+    let list_id = mcp
+        .send_raw_request("accountSession/list", Some(json!({})))
+        .await?;
+    let sessions: AccountSessionsResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(list_id)).await??;
+    assert_eq!(sessions, original_sessions);
+    assert_eq!(load_file_auth(codex_home.path())?, original_auth);
+    Ok(())
+}
+
 #[tokio::test]
 async fn login_account_chatgpt_device_code_failure_notifies_without_account_update() -> Result<()> {
     let codex_home = TempDir::new()?;
@@ -2454,6 +2773,31 @@ async fn login_account_chatgpt_uses_oauth_overrides() -> Result<()> {
             error: None,
             onboarding_entrypoint: None,
         }
+    );
+    let saved_auth = load_file_auth(codex_home.path())?.expect("browser login credentials");
+    assert_eq!(
+        (saved_auth.auth_mode, saved_auth.openai_api_key.as_deref()),
+        (Some(DomainAuthMode::Chatgpt), Some("access-token-123"))
+    );
+    let request_id = mcp
+        .send_raw_request("accountSession/list", Some(json!({})))
+        .await?;
+    let sessions: AccountSessionsResponse =
+        timeout(DEFAULT_READ_TIMEOUT, mcp.read_response(request_id)).await??;
+    assert_eq!(sessions.sessions.len(), 1);
+    let session = &sessions.sessions[0];
+    assert_eq!(
+        sessions.active_session_id.as_ref(),
+        Some(&session.session_id)
+    );
+    assert_eq!(
+        load_file_auth(
+            &codex_home
+                .path()
+                .join("account-sessions")
+                .join(&session.session_id)
+        )?,
+        Some(saved_auth)
     );
     Ok(())
 }

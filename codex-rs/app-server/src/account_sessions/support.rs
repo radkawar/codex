@@ -118,12 +118,15 @@ impl AccountSessionsStore<'_> {
     }
 
     pub(super) fn is_managed_chatgpt_auth_json(auth_json: &AuthDotJson) -> bool {
-        matches!(auth_json.auth_mode, None | Some(AuthMode::Chatgpt))
+        // Browser OAuth can store an exchanged API key alongside managed ChatGPT
+        // tokens. An explicit auth mode takes precedence over that companion key.
+        (auth_json.auth_mode == Some(AuthMode::Chatgpt)
+            || auth_json.auth_mode.is_none() && auth_json.openai_api_key.is_none())
             && auth_json.tokens.is_some()
-            && auth_json.openai_api_key.is_none()
             && auth_json.agent_identity.is_none()
             && auth_json.personal_access_token.is_none()
             && auth_json.bedrock_api_key.is_none()
+            && auth_json.bedrock_access_keys.is_none()
     }
 
     pub(super) fn workspace_from_account(account: AccountEntry) -> AccountSessionWorkspace {

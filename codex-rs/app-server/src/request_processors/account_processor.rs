@@ -32,11 +32,12 @@ use codex_app_server_protocol::AuthProfileSaveResponse;
 use codex_app_server_protocol::AuthProfileSummary;
 use codex_app_server_protocol::DesktopOnboardingEntrypoint;
 use codex_app_server_protocol::GetAccountRateLimitsParams;
-use codex_login::LoginOnboardingEntrypoint;
-use codex_login::login_with_bedrock_access_keys;
 use codex_login::AuthCredentialsStoreMode;
 use codex_login::AuthDotJson;
+use codex_login::LoginOnboardingEntrypoint;
+use codex_login::complete_device_code_login_with_cancel;
 use codex_login::load_auth_dot_json;
+use codex_login::login_with_bedrock_access_keys;
 use codex_login::logout;
 use codex_login::save_auth;
 use codex_model_provider::BearerAuthProvider;
@@ -45,7 +46,9 @@ use codex_protocol::auth::AuthMode as CoreAuthMode;
 use codex_protocol::protocol::RateLimitSnapshot as CoreRateLimitSnapshot;
 
 mod bedrock_setup;
+mod managed_login;
 mod rate_limit_resets;
+use managed_login::ManagedLoginAttempt;
 
 // Duration before a browser ChatGPT login attempt is abandoned.
 const LOGIN_CHATGPT_TIMEOUT: Duration = Duration::from_secs(10 * 60);
@@ -910,12 +913,14 @@ impl AccountRequestProcessor {
         destination: ChatgptLoginDestination,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
         self.sync_active_account_session().await?;
-        let opts = self
+        let mut opts = self
             .login_chatgpt_common(codex_streamlined_login, login_success_page)
             .await?;
+        let attempt = ManagedLoginAttempt::stage(&mut opts, Arc::clone(&self.active_login))
+            .map_err(|err| internal_error(format!("failed to stage login: {err}")))?;
         let server = run_login_server(opts)
             .map_err(|err| internal_error(format!("failed to start login server: {err}")))?;
-        let login_id = Uuid::new_v4();
+        let login_id = attempt.login_id;
         let shutdown_handle = server.cancel_handle();
 
         // Replace active login if present.
@@ -934,30 +939,28 @@ impl AccountRequestProcessor {
         let config_manager = self.config_manager.clone();
         let thread_manager = Arc::clone(&self.thread_manager);
         let config = Arc::clone(&self.config);
-        let active_login = self.active_login.clone();
         let auth_url = server.auth_url.clone();
         tokio::spawn(async move {
-            let (success, error_msg, onboarding_entrypoint) = match tokio::time::timeout(
-                LOGIN_CHATGPT_TIMEOUT,
-                server.block_until_done_with_callback_result(),
-            )
-            .await
-            {
-                Ok(Ok(result)) => (
-                    true,
-                    None,
-                    result
-                        .onboarding_entrypoint
-                        .map(|LoginOnboardingEntrypoint::LifeSciences| {
-                            DesktopOnboardingEntrypoint::LifeSciences
-                        }),
-                ),
-                Ok(Err(err)) => (false, Some(format!("Login server error: {err}")), None),
-                Err(_elapsed) => {
-                    shutdown_handle.shutdown();
-                    (false, Some("Login timed out".to_string()), None)
-                }
-            };
+            let completion = server.block_until_done_with_callback_result();
+            tokio::pin!(completion);
+            let (success, error_msg, onboarding_entrypoint) =
+                match tokio::time::timeout(LOGIN_CHATGPT_TIMEOUT, &mut completion).await {
+                    Ok(Ok(result)) => (
+                        true,
+                        None,
+                        result.onboarding_entrypoint.map(
+                            |LoginOnboardingEntrypoint::LifeSciences| {
+                                DesktopOnboardingEntrypoint::LifeSciences
+                            },
+                        ),
+                    ),
+                    Ok(Err(err)) => (false, Some(format!("Login server error: {err}")), None),
+                    Err(_elapsed) => {
+                        shutdown_handle.shutdown();
+                        let _ = completion.await;
+                        (false, Some("Login timed out".to_string()), None)
+                    }
+                };
 
             Self::send_chatgpt_login_completion_notifications(
                 &outgoing_clone,
@@ -971,14 +974,9 @@ impl AccountRequestProcessor {
                     onboarding_entrypoint,
                 },
                 destination,
+                attempt,
             )
             .await;
-
-            // Clear the active login if it matches this attempt. It may have been replaced or cancelled.
-            let mut guard = active_login.lock().await;
-            if guard.as_ref().map(ActiveLogin::login_id) == Some(login_id) {
-                *guard = None;
-            }
         });
 
         Ok(LoginAccountResponse::Chatgpt {
@@ -1001,16 +999,18 @@ impl AccountRequestProcessor {
         destination: ChatgptLoginDestination,
     ) -> Result<LoginAccountResponse, JSONRPCErrorError> {
         self.sync_active_account_session().await?;
-        let opts = self
+        let mut opts = self
             .login_chatgpt_common(
                 /*codex_streamlined_login*/ false,
                 LoginSuccessPage::default(),
             )
             .await?;
+        let attempt = ManagedLoginAttempt::stage(&mut opts, Arc::clone(&self.active_login))
+            .map_err(|err| internal_error(format!("failed to stage login: {err}")))?;
         let device_code = request_device_code(&opts)
             .await
             .map_err(Self::login_chatgpt_device_code_start_error)?;
-        let login_id = Uuid::new_v4();
+        let login_id = attempt.login_id;
         let cancel = CancellationToken::new();
 
         {
@@ -1031,19 +1031,14 @@ impl AccountRequestProcessor {
         let config_manager = self.config_manager.clone();
         let thread_manager = Arc::clone(&self.thread_manager);
         let config = Arc::clone(&self.config);
-        let active_login = self.active_login.clone();
         tokio::spawn(async move {
-            let (success, error_msg) = tokio::select! {
-                _ = cancel.cancelled() => {
-                    (false, Some("Login was not completed".to_string()))
-                }
-                r = complete_device_code_login(opts, device_code) => {
-                    match r {
-                        Ok(()) => (true, None),
-                        Err(err) => (false, Some(err.to_string())),
-                    }
-                }
-            };
+            let (success, error_msg) =
+                match complete_device_code_login_with_cancel(opts, device_code, cancel.cancelled())
+                    .await
+                {
+                    Ok(()) => (true, None),
+                    Err(err) => (false, Some(err.to_string())),
+                };
 
             Self::send_chatgpt_login_completion_notifications(
                 &outgoing_clone,
@@ -1057,13 +1052,9 @@ impl AccountRequestProcessor {
                     onboarding_entrypoint: None,
                 },
                 destination,
+                attempt,
             )
             .await;
-
-            let mut guard = active_login.lock().await;
-            if guard.as_ref().map(ActiveLogin::login_id) == Some(login_id) {
-                *guard = None;
-            }
         });
 
         Ok(LoginAccountResponse::ChatgptDeviceCode {
@@ -1216,19 +1207,16 @@ impl AccountRequestProcessor {
         config: Arc<Config>,
         mut payload_v2: AccountLoginCompletedNotification,
         destination: ChatgptLoginDestination,
+        attempt: ManagedLoginAttempt,
     ) {
-        if payload_v2.success {
-            let auth_manager = thread_manager.auth_manager();
-            auth_manager.reload().await;
-            let switch_to_added_account = destination == ChatgptLoginDestination::Activate;
-            if let Err(err) = AccountSessionsStore::new(&config, &auth_manager)
-                .add(switch_to_added_account)
-                .await
-            {
-                payload_v2.success = false;
-                payload_v2.error = Some(format!("failed to save account session: {err}"));
-            }
-        }
+        attempt
+            .finish(
+                &config,
+                &thread_manager.auth_manager(),
+                destination,
+                &mut payload_v2,
+            )
+            .await;
         let success = payload_v2.success;
         outgoing
             .send_server_notification(ServerNotification::AccountLoginCompleted(payload_v2))
